@@ -1,4 +1,7 @@
-"""Live GEX Monitor — main dashboard page with auto-refresh."""
+"""Live GEX Monitor — main dashboard page with auto-refresh.
+
+Optimized for mobile/tablet with stacked layout and touch-friendly elements.
+"""
 
 import sys
 
@@ -32,9 +35,9 @@ st.title("Live GEX Monitor")
 if HAS_AUTOREFRESH:
     st_autorefresh(interval=DASHBOARD_REFRESH_INTERVAL * 1000, key="gex_refresh")
 
-# Sidebar controls
-instrument_name = st.sidebar.selectbox(
-    "Select Index", list(INSTRUMENTS.keys()), index=0
+# Instrument selector — top of page as radio (mobile-friendly, no sidebar needed)
+instrument_name = st.radio(
+    "Index", list(INSTRUMENTS.keys()), index=0, horizontal=True
 )
 
 # Load token
@@ -46,7 +49,7 @@ except ValueError:
     token = None
 
 if not token_valid:
-    st.error("Upstox access token is invalid or not configured. Go to Settings page.")
+    st.error("Access token invalid. Go to Settings to paste your Upstox token.")
     st.stop()
 
 # Initialize session state
@@ -96,52 +99,63 @@ st.session_state.price_history.append({
     "ltp": spot_price,
 })
 
-# Row 1: Key metrics
-cols = st.columns(6)
-cols[0].metric("Spot Price", f"{spot_price:,.2f}")
-cols[1].metric("Gamma Flip", f"{profile.gamma_flip_level:,.0f}" if profile.gamma_flip_level else "N/A")
-cols[2].metric("Max Gamma", f"{profile.max_gamma_strike:,.0f}" if profile.max_gamma_strike else "N/A")
-cols[3].metric("Call Wall", f"{profile.call_wall:,.0f}" if profile.call_wall else "N/A")
-cols[4].metric("Put Wall", f"{profile.put_wall:,.0f}" if profile.put_wall else "N/A")
+# Metrics — 3 columns x 2 rows (fits mobile)
+st.caption(f"Expiry: {expiry_date} | TTE: {tte:.1f}h | {profile.timestamp:%H:%M:%S}")
+
+row1 = st.columns(3)
+row1[0].metric("Spot", f"{spot_price:,.2f}")
+row1[1].metric("Gamma Flip", f"{profile.gamma_flip_level:,.0f}" if profile.gamma_flip_level else "N/A")
+row1[2].metric("Max Gamma", f"{profile.max_gamma_strike:,.0f}" if profile.max_gamma_strike else "N/A")
+
+row2 = st.columns(3)
+row2[0].metric("Call Wall", f"{profile.call_wall:,.0f}" if profile.call_wall else "N/A")
+row2[1].metric("Put Wall", f"{profile.put_wall:,.0f}" if profile.put_wall else "N/A")
 regime = "POSITIVE" if profile.net_gex_total > 0 else "NEGATIVE"
 regime_delta = "normal" if profile.net_gex_total > 0 else "inverse"
-cols[5].metric("GEX Regime", regime, delta=f"{profile.net_gex_total:,.0f}", delta_color=regime_delta)
+row2[2].metric("GEX Regime", regime, delta=f"{profile.net_gex_total:,.0f}", delta_color=regime_delta)
 
-st.caption(f"Expiry: {expiry_date} | Time to Expiry: {tte:.1f}h | Last Update: {profile.timestamp:%H:%M:%S}")
-
-# Row 2: Charts
-chart_left, chart_right = st.columns([3, 2])
-
-with chart_left:
-    st.plotly_chart(render_gex_profile(profile), use_container_width=True)
-
-with chart_right:
-    price_df = pd.DataFrame(st.session_state.price_history)
-    if not price_df.empty:
-        st.plotly_chart(
-            render_price_with_walls(price_df, profile),
-            use_container_width=True,
-        )
-    else:
-        st.info("Price chart will appear after data accumulates.")
-
-# Row 3: Current signals
+# Signals — styled cards (touch-friendly)
 if signals:
-    st.subheader(f"Active Signals ({len(signals)})")
+    st.subheader(f"Signals ({len(signals)})")
     for sig in signals:
-        arrow = {"bullish": ":green[▲ BULLISH]", "bearish": ":red[▼ BEARISH]"}.get(
-            sig.direction, ":orange[● NEUTRAL]"
-        )
-        st.markdown(
-            f"**{sig.signal_type.replace('_', ' ').upper()}** @ {sig.level:,.2f} | "
-            f"Strength: {sig.strength:.0%} | {arrow}"
-        )
-else:
-    st.info("No signals triggered in this update.")
+        if sig.direction == "bullish":
+            css_class = "signal-bullish"
+            arrow = "▲ BULLISH"
+        elif sig.direction == "bearish":
+            css_class = "signal-bearish"
+            arrow = "▼ BEARISH"
+        else:
+            css_class = "signal-neutral"
+            arrow = "● NEUTRAL"
 
-# Row 4: Signal timeline
+        st.markdown(
+            f'<div class="signal-card {css_class}">'
+            f'<strong>{sig.signal_type.replace("_", " ").upper()}</strong> '
+            f'@ {sig.level:,.2f} &nbsp;|&nbsp; '
+            f'Strength: {sig.strength:.0%} &nbsp;|&nbsp; {arrow}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+# Charts — stacked vertically (full width, scrollable on mobile)
+st.plotly_chart(
+    render_gex_profile(profile),
+    use_container_width=True,
+    config={"displayModeBar": False},
+)
+
+price_df = pd.DataFrame(st.session_state.price_history)
+if not price_df.empty:
+    st.plotly_chart(
+        render_price_with_walls(price_df, profile),
+        use_container_width=True,
+        config={"displayModeBar": False},
+    )
+
+# Signal timeline
 if st.session_state.signal_history:
     st.plotly_chart(
         render_signal_timeline(st.session_state.signal_history),
         use_container_width=True,
+        config={"displayModeBar": False},
     )

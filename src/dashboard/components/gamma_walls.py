@@ -88,13 +88,18 @@ def render_price_with_walls(
         )
 
     fig.update_layout(
-        title=f"{gex_profile.instrument} Price with Gamma Levels",
+        title=dict(
+            text=f"{gex_profile.instrument} Price with Gamma Levels",
+            font=dict(size=16),
+        ),
         xaxis_title="Time",
         yaxis_title="Price",
         template="plotly_dark",
-        height=500,
+        height=400,
         xaxis_rangeslider_visible=False,
-        margin=dict(l=60, r=40, t=60, b=40),
+        margin=dict(l=50, r=20, t=50, b=30),
+        font=dict(size=13),
     )
+    fig.update_annotations(font_size=13)
 
     return fig

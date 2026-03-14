@@ -59,9 +59,9 @@ def render_signal_timeline(signals: list[GEXSignal]) -> go.Figure:
             name=sig_type.replace("_", " ").title(),
             marker=dict(
                 color=color,
-                size=[max(s.strength * 20, 8) for s in sigs],
+                size=[max(s.strength * 24, 12) for s in sigs],
                 symbol=symbol,
-                line=dict(width=1, color="white"),
+                line=dict(width=1.5, color="white"),
             ),
             hovertemplate=(
                 "Time: %{x}<br>"
@@ -77,13 +77,15 @@ def render_signal_timeline(signals: list[GEXSignal]) -> go.Figure:
         ))
 
     fig.update_layout(
-        title="Signal Timeline",
+        title=dict(text="Signal Timeline", font=dict(size=16)),
         xaxis_title="Time",
-        yaxis_title="Signal Type",
+        yaxis_title="",
         template="plotly_dark",
-        height=300,
+        height=250,
         showlegend=True,
-        margin=dict(l=120, r=40, t=60, b=40),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, font=dict(size=12)),
+        margin=dict(l=100, r=20, t=60, b=30),
+        font=dict(size=13),
     )
 
     return fig

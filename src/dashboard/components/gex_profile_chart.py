@@ -65,13 +65,18 @@ def render_gex_profile(gex_profile: GEXProfile) -> go.Figure:
         )
 
     fig.update_layout(
-        title=f"{gex_profile.instrument} GEX Profile | {gex_profile.expiry_date}",
+        title=dict(
+            text=f"{gex_profile.instrument} GEX Profile | {gex_profile.expiry_date}",
+            font=dict(size=16),
+        ),
         xaxis_title="Net Gamma Exposure",
         yaxis_title="Strike Price",
         template="plotly_dark",
-        height=600,
+        height=450,
         showlegend=False,
-        margin=dict(l=80, r=40, t=60, b=40),
+        margin=dict(l=70, r=20, t=50, b=30),
+        font=dict(size=13),
     )
+    fig.update_annotations(font_size=14)
 
     return fig

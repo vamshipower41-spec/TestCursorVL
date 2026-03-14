@@ -18,12 +18,13 @@ if "signal_history" not in st.session_state or not st.session_state.signal_histo
 
 signals = st.session_state.signal_history
 
-# Filters
-signal_types = sorted({s.signal_type for s in signals})
-selected_types = st.sidebar.multiselect(
-    "Filter Signal Types", signal_types, default=signal_types
-)
-min_strength = st.sidebar.slider("Minimum Strength", 0.0, 1.0, 0.0, 0.05)
+# Filters — inline expander (mobile-friendly, no sidebar needed)
+with st.expander("Filters", expanded=False):
+    signal_types = sorted({s.signal_type for s in signals})
+    selected_types = st.multiselect(
+        "Signal Types", signal_types, default=signal_types
+    )
+    min_strength = st.slider("Minimum Strength", 0.0, 1.0, 0.0, 0.05)
 
 filtered = [
     s for s in signals
@@ -31,7 +32,11 @@ filtered = [
 ]
 
 # Timeline chart
-st.plotly_chart(render_signal_timeline(filtered), use_container_width=True)
+st.plotly_chart(
+    render_signal_timeline(filtered),
+    use_container_width=True,
+    config={"displayModeBar": False},
+)
 
 # Detail table
 st.subheader(f"Signal Log ({len(filtered)} signals)")
