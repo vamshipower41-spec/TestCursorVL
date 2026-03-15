@@ -13,6 +13,7 @@ import argparse
 import sys
 import time
 from datetime import datetime
+from src.utils.ist import now_ist
 
 sys.path.insert(0, ".")
 
@@ -44,14 +45,14 @@ def main():
     print(f"Interval: {args.interval}s | Saving to data/historical/")
 
     while True:
-        now = datetime.now()
+        now = now_ist()
         # Only collect during market hours (9:15 - 15:30 IST)
         if now.hour < 9 or (now.hour == 9 and now.minute < 15):
-            print(f"[{now:%H:%M:%S}] Waiting for market open...")
+            print(f"[{now:%H:%M:%S}] Waiting for market open (IST)...")
             time.sleep(60)
             continue
         if now.hour > 15 or (now.hour == 15 and now.minute > 30):
-            print(f"[{now:%H:%M:%S}] Market closed. Done for today.")
+            print(f"[{now:%H:%M:%S}] Market closed (IST). Done for today.")
             break
 
         try:

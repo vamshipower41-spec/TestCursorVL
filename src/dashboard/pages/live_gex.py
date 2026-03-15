@@ -9,7 +9,8 @@ sys.path.insert(0, ".")
 
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+
+from src.utils.ist import now_ist, time_to_expiry_hours as compute_tte
 
 try:
     from streamlit_autorefresh import st_autorefresh
@@ -80,8 +81,7 @@ profile = build_gex_profile(
 )
 
 # Compute time to expiry
-expiry_dt = datetime.strptime(expiry_date, "%Y-%m-%d").replace(hour=15, minute=30)
-tte = max((expiry_dt - datetime.now()).total_seconds() / 3600.0, 0.0)
+tte = compute_tte(expiry_date)
 
 # Generate signals
 signals = generate_signals(profile, st.session_state.prev_profile, tte)

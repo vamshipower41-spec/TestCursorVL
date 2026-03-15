@@ -12,6 +12,7 @@ import argparse
 import sys
 import time
 from datetime import datetime
+from src.utils.ist import now_ist, time_to_expiry_hours as ist_tte
 
 sys.path.insert(0, ".")
 
@@ -26,10 +27,7 @@ from src.engine.signal_generator import generate_signals
 
 def compute_time_to_expiry_hours(expiry_date: str) -> float:
     """Compute hours until expiry (3:30 PM IST)."""
-    expiry_dt = datetime.strptime(expiry_date, "%Y-%m-%d").replace(hour=15, minute=30)
-    now = datetime.now()
-    delta = expiry_dt - now
-    return max(delta.total_seconds() / 3600.0, 0.0)
+    return ist_tte(expiry_date)
 
 
 def run(instrument_name: str, interval: int, expiry_date: str | None) -> None:

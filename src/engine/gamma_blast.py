@@ -27,6 +27,7 @@ from src.engine.charm_vanna import (
     compute_vanna_exposure,
     compute_oi_change,
 )
+from src.engine.blast_filters import apply_all_filters, classify_vix_regime
 from config.settings import (
     BLAST_MIN_SCORE,
     BLAST_MAX_SIGNALS_PER_DAY,
@@ -58,8 +59,11 @@ def detect_gamma_blast(
     time_to_expiry_hours: float,
     fired_today: int = 0,
     last_blast_time: datetime | None = None,
+    price_history: list[float] | None = None,
+    vix_value: float | None = None,
+    expiry_date: str = "",
 ) -> GammaBlast | None:
-    """Run all 6 models and produce a blast signal if composite score is high enough.
+    """Run all 6 models, apply 7 quality filters, produce blast if score is high enough.
 
     Args:
         profile: Current GEX profile
@@ -69,9 +73,12 @@ def detect_gamma_blast(
         time_to_expiry_hours: Hours until 3:30 PM IST
         fired_today: Number of blast signals already fired today
         last_blast_time: Timestamp of last blast signal
+        price_history: Recent spot prices for trend detection
+        vix_value: Current India VIX value (None if unavailable)
+        expiry_date: Expiry date string (YYYY-MM-DD)
 
     Returns:
-        GammaBlast if composite score >= threshold, else None
+        GammaBlast if filtered composite score >= threshold, else None
     """
     # Guard: max signals per day
     if fired_today >= BLAST_MAX_SIGNALS_PER_DAY:
@@ -87,32 +94,41 @@ def detect_gamma_blast(
     if time_to_expiry_hours > 7.0:
         return None
 
+    # Adaptive weights: adjust based on VIX regime
+    active_weights = dict(MODEL_WEIGHTS)
+    if vix_value is not None and vix_value > 0:
+        vix_regime = classify_vix_regime(vix_value)
+        if vix_regime["weight_overrides"]:
+            active_weights = vix_regime["weight_overrides"]
+
     # Run all 6 models
     components = []
     direction_votes = {"bullish": 0.0, "bearish": 0.0}
 
     # 1. GEX Zero-Cross Cascade
     score, direction = _score_gex_zero_cross(profile, prev_profile)
+    w = active_weights["gex_zero_cross"]
     components.append(BlastComponent(
         model_name="gex_zero_cross",
         score=score,
-        weight=MODEL_WEIGHTS["gex_zero_cross"],
+        weight=w,
         detail=f"Gamma flip {'crossed' if score > 50 else 'not crossed'}; "
                f"regime={'neg' if profile.net_gex_total < 0 else 'pos'}",
     ))
     if direction:
-        direction_votes[direction] += score * MODEL_WEIGHTS["gex_zero_cross"]
+        direction_votes[direction] += score * w
 
     # 2. Gamma Wall Breach
     score, direction = _score_gamma_wall_breach(profile, prev_profile)
+    w = active_weights["gamma_wall_breach"]
     components.append(BlastComponent(
         model_name="gamma_wall_breach",
         score=score,
-        weight=MODEL_WEIGHTS["gamma_wall_breach"],
+        weight=w,
         detail=f"Wall breach score {score:.0f}",
     ))
     if direction:
-        direction_votes[direction] += score * MODEL_WEIGHTS["gamma_wall_breach"]
+        direction_votes[direction] += score * w
 
     # 3. Charm Flow Accelerator
     charm_data = compute_charm_flow(
@@ -120,56 +136,60 @@ def detect_gamma_blast(
         profile.contract_multiplier,
     )
     score, direction = _score_charm_flow(charm_data, time_to_expiry_hours)
+    w = active_weights["charm_flow"]
     components.append(BlastComponent(
         model_name="charm_flow",
         score=score,
-        weight=MODEL_WEIGHTS["charm_flow"],
+        weight=w,
         detail=f"Charm intensity {charm_data['charm_intensity']:.0f}; "
                f"net flow {'bullish' if charm_data['net_charm_flow'] > 0 else 'bearish'}",
     ))
     if direction:
-        direction_votes[direction] += score * MODEL_WEIGHTS["charm_flow"]
+        direction_votes[direction] += score * w
 
     # 4. Negative Gamma Squeeze
     score, direction = _score_negative_gamma_squeeze(profile, prev_profile)
+    w = active_weights["negative_gamma_squeeze"]
     components.append(BlastComponent(
         model_name="negative_gamma_squeeze",
         score=score,
-        weight=MODEL_WEIGHTS["negative_gamma_squeeze"],
+        weight=w,
         detail=f"Net GEX {profile.net_gex_total:,.0f}; "
                f"regime={'NEGATIVE' if profile.net_gex_total < 0 else 'POSITIVE'}",
     ))
     if direction:
-        direction_votes[direction] += score * MODEL_WEIGHTS["negative_gamma_squeeze"]
+        direction_votes[direction] += score * w
 
     # 5. Pin Break Blast
     score, direction = _score_pin_break(profile, prev_profile)
+    w = active_weights["pin_break"]
     components.append(BlastComponent(
         model_name="pin_break",
         score=score,
-        weight=MODEL_WEIGHTS["pin_break"],
+        weight=w,
         detail=f"Distance from pin: "
                f"{abs(profile.spot_price - (profile.max_gamma_strike or profile.spot_price)) / profile.spot_price:.2%}",
     ))
     if direction:
-        direction_votes[direction] += score * MODEL_WEIGHTS["pin_break"]
+        direction_votes[direction] += score * w
 
     # 6. Vanna Squeeze
     vanna_data = compute_vanna_exposure(
         chain_df, prev_chain_df, profile.spot_price, profile.contract_multiplier,
     )
     score, direction = _score_vanna_squeeze(vanna_data)
+    w = active_weights["vanna_squeeze"]
     components.append(BlastComponent(
         model_name="vanna_squeeze",
         score=score,
-        weight=MODEL_WEIGHTS["vanna_squeeze"],
+        weight=w,
         detail=f"Vanna intensity {vanna_data['vanna_intensity']:.0f}; "
                f"avg IV change {vanna_data['avg_iv_change']:.2f}",
     ))
     if direction:
-        direction_votes[direction] += score * MODEL_WEIGHTS["vanna_squeeze"]
+        direction_votes[direction] += score * w
 
-    # Compute composite score
+    # Compute raw composite score
     composite = sum(c.score * c.weight for c in components)
 
     # Determine direction
@@ -180,8 +200,22 @@ def detect_gamma_blast(
         else "bearish"
     )
 
-    # Apply threshold
-    if composite < BLAST_MIN_SCORE:
+    # Apply 7 quality filters (trend, VIX, volume, timing, expiry type,
+    # liquidity, max pain) — this is what separates 5/10 from 9/10
+    filtered_score, filter_details = apply_all_filters(
+        raw_score=composite,
+        blast_direction=blast_direction,
+        profile=profile,
+        chain_df=chain_df,
+        prev_chain_df=prev_chain_df,
+        time_to_expiry_hours=time_to_expiry_hours,
+        price_history=price_history or [],
+        vix_value=vix_value,
+        expiry_date=expiry_date,
+    )
+
+    # Apply threshold against filtered score
+    if filtered_score < BLAST_MIN_SCORE:
         return None
 
     # Compute entry/SL/target
@@ -190,7 +224,7 @@ def detect_gamma_blast(
     return GammaBlast(
         timestamp=profile.timestamp,
         instrument=profile.instrument,
-        composite_score=round(composite, 1),
+        composite_score=round(filtered_score, 1),
         direction=blast_direction,
         entry_level=entry,
         stop_loss=sl,
@@ -198,7 +232,12 @@ def detect_gamma_blast(
         time_to_expiry_hours=time_to_expiry_hours,
         components=components,
         metadata={
+            "raw_score": round(composite, 1),
+            "filtered_score": round(filtered_score, 1),
+            "filters_applied": filter_details,
             "direction_votes": direction_votes,
+            "vix_value": vix_value,
+            "adaptive_weights": active_weights,
             "charm_data": {
                 "net_charm_flow": charm_data["net_charm_flow"],
                 "charm_intensity": charm_data["charm_intensity"],

@@ -11,7 +11,7 @@ import pandas as pd
 
 from src.data.models import GEXProfile, StrikeGEX
 from config.settings import GEX_TOP_N_WALLS
-from datetime import datetime
+from src.utils.ist import now_ist
 
 
 def compute_gex_profile(
@@ -134,7 +134,7 @@ def build_gex_profile(
 ) -> GEXProfile:
     """Full pipeline: compute GEX and extract all key levels into a GEXProfile."""
     if timestamp is None:
-        timestamp = datetime.now()
+        timestamp = now_ist()
 
     gex_df = compute_gex_profile(chain_df, spot_price, contract_multiplier)
 

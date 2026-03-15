@@ -11,7 +11,9 @@ sys.path.insert(0, ".")
 
 import streamlit as st
 import pandas as pd
-from datetime import datetime, date
+from datetime import date
+
+from src.utils.ist import now_ist, today_ist, time_to_expiry_hours as compute_tte
 
 try:
     from streamlit_autorefresh import st_autorefresh
@@ -25,6 +27,7 @@ from config.settings import (
     EXPIRY_DAY_POLL_INTERVAL,
     DASHBOARD_REFRESH_INTERVAL,
 )
+from config.settings import UPSTOX_BASE_URL
 from src.auth.upstox_auth import load_access_token
 from src.data.options_chain import OptionsChainFetcher
 from src.engine.gex_calculator import build_gex_profile
@@ -48,7 +51,7 @@ EXPIRY_DAYS = {
 
 def _get_todays_expiry_instrument() -> str | None:
     """Return the instrument whose expiry is today, or None."""
-    today_weekday = date.today().weekday()
+    today_weekday = today_ist().weekday()
     for name, weekday in EXPIRY_DAYS.items():
         if today_weekday == weekday:
             return name
@@ -57,7 +60,7 @@ def _get_todays_expiry_instrument() -> str | None:
 
 def _is_expiry_day(instrument_name: str) -> bool:
     """Check if today is expiry day for the given instrument."""
-    today_weekday = date.today().weekday()
+    today_weekday = today_ist().weekday()
     return today_weekday == EXPIRY_DAYS.get(instrument_name, -1)
 
 
@@ -118,13 +121,17 @@ if "blast_prev_chain" not in st.session_state:
     st.session_state.blast_prev_chain = None
 if "blast_last_date" not in st.session_state:
     st.session_state.blast_last_date = None
+if "blast_price_history" not in st.session_state:
+    st.session_state.blast_price_history = []
+if "blast_vix_value" not in st.session_state:
+    st.session_state.blast_vix_value = None
 
 # Reset daily counters if new day
-if st.session_state.blast_last_date != date.today().isoformat():
+if st.session_state.blast_last_date != today_ist().isoformat():
     st.session_state.blast_fired_today = 0
     st.session_state.blast_last_time = None
     st.session_state.blast_history = []
-    st.session_state.blast_last_date = date.today().isoformat()
+    st.session_state.blast_last_date = today_ist().isoformat()
 
 # Fetch data
 inst = get_instrument(instrument_name)
@@ -150,24 +157,68 @@ profile = build_gex_profile(
     instrument_name, expiry_date,
 )
 
+# Track price history for trend filter
+st.session_state.blast_price_history.append(spot_price)
+# Keep last 20 data points
+st.session_state.blast_price_history = st.session_state.blast_price_history[-20:]
+
+# Try to fetch India VIX (best-effort, non-blocking)
+try:
+    import requests
+    vix_resp = requests.get(
+        f"{UPSTOX_BASE_URL}/market-quote/quotes",
+        params={"instrument_key": "NSE_INDEX|India VIX"},
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        timeout=5,
+    )
+    if vix_resp.status_code == 200:
+        vix_data = vix_resp.json().get("data", {})
+        for v in vix_data.values():
+            ltp = v.get("last_price", 0) or v.get("ltp", 0)
+            if ltp > 0:
+                st.session_state.blast_vix_value = ltp
+except Exception:
+    pass  # VIX fetch failed — continue without it
+
+vix_val = st.session_state.blast_vix_value
+
 # Time to expiry
-expiry_dt = datetime.strptime(expiry_date, "%Y-%m-%d").replace(hour=15, minute=30)
-tte = max((expiry_dt - datetime.now()).total_seconds() / 3600.0, 0.0)
+tte = compute_tte(expiry_date)
 
 # Key metrics row
-st.caption(f"Expiry: {expiry_date} | TTE: {tte:.1f}h | Last update: {profile.timestamp:%H:%M:%S} IST")
+vix_display = f" | VIX: {vix_val:.1f}" if vix_val else ""
+st.caption(f"Expiry: {expiry_date} | TTE: {tte:.1f}h{vix_display} | Last update: {profile.timestamp:%H:%M:%S} IST")
 
-cols = st.columns(4)
-cols[0].metric("Spot", f"{spot_price:,.2f}")
-cols[1].metric("Gamma Flip", f"{profile.gamma_flip_level:,.0f}" if profile.gamma_flip_level else "N/A")
+row1 = st.columns(4)
+row1[0].metric("Spot", f"{spot_price:,.2f}")
+row1[1].metric("Gamma Flip", f"{profile.gamma_flip_level:,.0f}" if profile.gamma_flip_level else "N/A")
 regime = "POSITIVE" if profile.net_gex_total > 0 else "NEGATIVE"
 regime_color = "normal" if profile.net_gex_total > 0 else "inverse"
-cols[2].metric("GEX Regime", regime, delta=f"{profile.net_gex_total:,.0f}", delta_color=regime_color)
-cols[3].metric("Max Gamma Pin", f"{profile.max_gamma_strike:,.0f}" if profile.max_gamma_strike else "N/A")
+row1[2].metric("GEX Regime", regime, delta=f"{profile.net_gex_total:,.0f}", delta_color=regime_color)
+row1[3].metric("Max Gamma Pin", f"{profile.max_gamma_strike:,.0f}" if profile.max_gamma_strike else "N/A")
+
+# Additional context row
+row2 = st.columns(4)
+row2[0].metric("Call Wall", f"{profile.call_wall:,.0f}" if profile.call_wall else "N/A")
+row2[1].metric("Put Wall", f"{profile.put_wall:,.0f}" if profile.put_wall else "N/A")
+if vix_val:
+    vix_regime = "LOW" if vix_val < 14 else ("NORMAL" if vix_val < 18 else ("HIGH" if vix_val < 22 else "EXTREME"))
+    row2[2].metric("India VIX", f"{vix_val:.1f}", delta=vix_regime,
+                   delta_color="normal" if vix_val < 18 else "inverse")
+else:
+    row2[2].metric("India VIX", "N/A")
+
+# Trend indicator
+from src.engine.blast_filters import compute_trend_bias
+trend_data = compute_trend_bias(st.session_state.blast_price_history)
+trend_arrow = {"bullish": "UP", "bearish": "DOWN", "neutral": "FLAT"}.get(trend_data["trend"], "?")
+row2[3].metric("Trend", trend_arrow, delta=f"{trend_data['strength']:.0%} strength",
+               delta_color="normal" if trend_data["trend"] == "bullish" else (
+                   "inverse" if trend_data["trend"] == "bearish" else "off"))
 
 st.markdown("---")
 
-# Run gamma blast detection
+# Run gamma blast detection with all filters
 blast = detect_gamma_blast(
     profile=profile,
     prev_profile=st.session_state.blast_prev_profile,
@@ -176,6 +227,9 @@ blast = detect_gamma_blast(
     time_to_expiry_hours=tte,
     fired_today=st.session_state.blast_fired_today,
     last_blast_time=st.session_state.blast_last_time,
+    price_history=st.session_state.blast_price_history,
+    vix_value=vix_val,
+    expiry_date=expiry_date,
 )
 
 # Update state for next iteration
@@ -192,6 +246,36 @@ if blast is not None:
 
     with st.expander("Model Breakdown", expanded=True):
         render_blast_components(blast)
+
+    # Show filter details
+    filters = blast.metadata.get("filters_applied", {})
+    if filters:
+        with st.expander("Quality Filters Applied"):
+            raw = blast.metadata.get("raw_score", 0)
+            final = filters.get("final_score", 0)
+            st.markdown(f"**Raw Score:** {raw:.0f} → **Filtered Score:** {final:.0f}")
+
+            trend_info = filters.get("trend", {})
+            if trend_info:
+                st.markdown(f"- **Trend:** {trend_info.get('trend', '?')} "
+                           f"(strength {trend_info.get('strength', 0):.0%})")
+
+            vix_info = filters.get("vix_regime", {})
+            if vix_info:
+                st.markdown(f"- **VIX Regime:** {vix_info.get('regime', '?')} "
+                           f"(adj: -{vix_info.get('threshold_adjustment', 0)} pts)")
+
+            vol_info = filters.get("volume", {})
+            if vol_info:
+                st.markdown(f"- **Volume:** {'Confirmed' if vol_info.get('confirmed') else 'Weak'} "
+                           f"(score {vol_info.get('volume_score', 0):.0f}, "
+                           f"dominant: {vol_info.get('dominant_side', '?')})")
+
+            max_pain = filters.get("max_pain")
+            if max_pain:
+                st.markdown(f"- **Max Pain:** {max_pain:,.0f}")
+
+            st.markdown(f"- **Monthly Expiry:** {'Yes' if filters.get('is_monthly') else 'No'}")
 else:
     render_no_blast_status(
         instrument=instrument_name,
@@ -240,18 +324,29 @@ if st.session_state.blast_history:
 # Footer with model info
 with st.expander("About Gamma Blast Models"):
     st.markdown("""
-**6 Models Combined for High-Conviction Scalping:**
+**6 Models + 7 Quality Filters for High-Conviction Scalping:**
 
-1. **GEX Zero-Cross Cascade (25%)** — Spot crosses gamma flip level, triggering dealer hedging cascade
-2. **Gamma Wall Breach (20%)** — Price breaks through call/put wall with velocity
-3. **Charm Flow Accelerator (15%)** — Expiry-day delta decay creates directional dealer flow
-4. **Negative Gamma Squeeze (15%)** — In negative gamma, dealer hedging amplifies moves
-5. **Pin Break Blast (15%)** — Price breaks away from max gamma pin strike
-6. **Vanna Squeeze (10%)** — IV crush + vanna exposure creates directional hedging flow
+**Models (weights adapt to VIX regime):**
+1. **GEX Zero-Cross Cascade** — Spot crosses gamma flip, triggering dealer hedging cascade
+2. **Gamma Wall Breach** — Price breaks call/put wall with velocity confirmation
+3. **Charm Flow Accelerator** — Expiry-day delta decay creates directional dealer flow
+4. **Negative Gamma Squeeze** — In negative gamma, dealer hedging amplifies moves
+5. **Pin Break Blast** — Price breaks away from max gamma pin strike
+6. **Vanna Squeeze** — IV crush + vanna exposure creates directional hedging flow
+
+**7 Quality Filters (what makes it accurate):**
+1. **Trend Filter** — EMA-based, penalizes counter-trend blasts by up to 25 pts
+2. **VIX Regime** — Adapts weights & threshold (Low/Normal/High/Extreme vol)
+3. **Volume Confirmation** — Requires ATM volume spike, 30% penalty if absent
+4. **Smart Timing** — Morning signals penalized 40%, charm zone (1:30 PM+) boosted 15%
+5. **Monthly vs Weekly** — Suppresses breakouts near max gamma on monthly expiry
+6. **Sensex Liquidity** — Penalizes low-OI chains (BSE has 10x less liquidity)
+7. **Max Pain Proximity** — Suppresses signals when pinned near max pain close to expiry
 
 **Rules:**
-- Composite score must reach **70+** to fire
+- Filtered composite score must reach **70+** to fire
 - Maximum **2 signals** per expiry day
 - **30-minute cooldown** between signals
 - Entry/SL/Target based on gamma walls
+- All times in **IST**
     """)

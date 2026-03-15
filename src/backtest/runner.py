@@ -83,9 +83,11 @@ class BacktestRunner:
                 instrument, expiry_date, timestamp,
             )
 
-            # Compute time to expiry (3:30 PM)
-            expiry_dt = datetime.strptime(expiry_date, "%Y-%m-%d").replace(hour=15, minute=30)
-            tte = max((expiry_dt - timestamp).total_seconds() / 3600.0, 0.0)
+            # Compute time to expiry (3:30 PM IST)
+            from src.utils.ist import expiry_datetime, make_ist
+            expiry_dt = expiry_datetime(expiry_date)
+            ts_ist = make_ist(timestamp)
+            tte = max((expiry_dt - ts_ist).total_seconds() / 3600.0, 0.0)
 
             signals = generate_signals(profile, prev_profile, tte)
 
