@@ -146,17 +146,21 @@ if not _handle_oauth():
 
     st.stop()
 
-# Navigation
+# Navigation — resolve page paths relative to this file
+from pathlib import Path
+
+_pages_dir = Path(__file__).parent / "pages"
+
 pages = {
     "Live GEX": [
-        st.Page("src/dashboard/pages/live_gex.py", title="Live GEX Monitor", icon="📈"),
+        st.Page(str(_pages_dir / "live_gex.py"), title="Live GEX Monitor", icon="📈"),
     ],
     "Analysis": [
-        st.Page("src/dashboard/pages/signals.py", title="Signal Timeline", icon="🔔"),
-        st.Page("src/dashboard/pages/backtest_results.py", title="Backtest Results", icon="📊"),
+        st.Page(str(_pages_dir / "signals.py"), title="Signal Timeline", icon="🔔"),
+        st.Page(str(_pages_dir / "backtest_results.py"), title="Backtest Results", icon="📊"),
     ],
     "Config": [
-        st.Page("src/dashboard/pages/settings_page.py", title="Settings", icon="⚙️"),
+        st.Page(str(_pages_dir / "settings_page.py"), title="Settings", icon="⚙️"),
     ],
 }
 
