@@ -63,5 +63,33 @@ class GEXSignal(BaseModel):
     metadata: dict = {}
 
 
+class BlastComponent(BaseModel):
+    """Individual gamma blast model score contribution."""
+
+    model_name: str  # e.g. "gex_zero_cross", "charm_flow", "pin_break"
+    score: float  # 0-100 contribution from this model
+    weight: float  # weight in composite (sums to 1.0)
+    detail: str  # human-readable explanation
+
+
+class GammaBlast(BaseModel):
+    """High-conviction gamma blast signal for expiry-day scalping.
+
+    Composite of 6 gamma models, only fires when score >= threshold.
+    Designed for 1-2 trades per expiry day.
+    """
+
+    timestamp: datetime
+    instrument: str  # "NIFTY" or "SENSEX"
+    composite_score: float  # 0-100 overall conviction
+    direction: str  # "bullish" or "bearish"
+    entry_level: float  # suggested entry price
+    stop_loss: float  # suggested stop loss
+    target: float  # suggested target
+    time_to_expiry_hours: float
+    components: list[BlastComponent]  # breakdown by model
+    metadata: dict = {}
+
+
 # Rebuild GEXProfile now that StrikeGEX is defined
 GEXProfile.model_rebuild()

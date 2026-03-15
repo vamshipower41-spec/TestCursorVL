@@ -7,7 +7,7 @@ INSTRUMENTS = {
         "contract_multiplier": 65,
         "tick_size": 0.05,
         "exchange": "NSE",
-        "weekly_expiry_day": "Thursday",  # or previous trading day if holiday
+        "weekly_expiry_day": "Tuesday",  # or previous trading day if holiday
     },
     "SENSEX": {
         "instrument_key": "BSE_INDEX|SENSEX",
@@ -15,7 +15,7 @@ INSTRUMENTS = {
         "contract_multiplier": 20,
         "tick_size": 0.05,
         "exchange": "BSE",
-        "weekly_expiry_day": "Friday",
+        "weekly_expiry_day": "Thursday",
     },
 }
 
