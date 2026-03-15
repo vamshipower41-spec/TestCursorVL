@@ -40,16 +40,11 @@ instrument_name = st.radio(
     "Index", list(INSTRUMENTS.keys()), index=0, horizontal=True
 )
 
-# Load token
+# Load token (from OAuth session or .env fallback)
 try:
     token = load_access_token()
-    token_valid = validate_token(token)
 except ValueError:
-    token_valid = False
-    token = None
-
-if not token_valid:
-    st.error("Access token invalid. Go to Settings to paste your Upstox token.")
+    st.error("Not logged in. Please refresh the page to login.")
     st.stop()
 
 # Initialize session state

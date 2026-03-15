@@ -3,7 +3,17 @@
 Run with: streamlit run src/dashboard/app.py
 """
 
+import sys
+
+sys.path.insert(0, ".")
+
 import streamlit as st
+
+from src.auth.upstox_auth import (
+    get_login_url,
+    exchange_code_for_token,
+    validate_token,
+)
 
 st.set_page_config(
     page_title="GEX Signal Dashboard",
@@ -76,6 +86,65 @@ st.markdown("""
 }
 </style>
 """, unsafe_allow_html=True)
+
+# --- OAuth Login Gate ---
+def _get_redirect_uri() -> str:
+    """Determine the app's redirect URI based on environment."""
+    # On Streamlit Cloud, use the app's public URL
+    try:
+        return st.secrets["REDIRECT_URI"]
+    except Exception:
+        return "http://localhost:8501"
+
+
+def _handle_oauth():
+    """Handle the Upstox OAuth flow. Returns True if authenticated."""
+    # Already authenticated this session
+    if st.session_state.get("upstox_access_token"):
+        if validate_token(st.session_state["upstox_access_token"]):
+            return True
+        # Token expired, clear it
+        del st.session_state["upstox_access_token"]
+
+    # Check for auth code in URL (redirect from Upstox)
+    query_params = st.query_params
+    auth_code = query_params.get("code")
+
+    if auth_code:
+        try:
+            api_key = st.secrets["UPSTOX_API_KEY"]
+            api_secret = st.secrets["UPSTOX_API_SECRET"]
+            redirect_uri = _get_redirect_uri()
+            token = exchange_code_for_token(
+                auth_code, api_key, api_secret, redirect_uri
+            )
+            st.session_state["upstox_access_token"] = token
+            st.query_params.clear()
+            st.rerun()
+        except Exception as e:
+            st.error(f"Login failed: {e}")
+            st.query_params.clear()
+            return False
+
+    return False
+
+
+if not _handle_oauth():
+    # Show login page
+    st.title("GEX Signal Dashboard")
+    st.markdown("---")
+    st.subheader("Login with Upstox to continue")
+    st.caption("Your credentials go directly to Upstox — this app never sees your password.")
+
+    try:
+        api_key = st.secrets["UPSTOX_API_KEY"]
+        redirect_uri = _get_redirect_uri()
+        login_url = get_login_url(api_key, redirect_uri)
+        st.link_button("Login with Upstox", login_url, type="primary")
+    except Exception:
+        st.error("UPSTOX_API_KEY not configured. Add it in Streamlit Secrets.")
+
+    st.stop()
 
 # Navigation
 pages = {
