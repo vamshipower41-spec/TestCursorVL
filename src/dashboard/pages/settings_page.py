@@ -15,7 +15,8 @@ from pathlib import Path
 
 from src.auth.upstox_auth import load_access_token, validate_token
 from config.instruments import INSTRUMENTS
-from config.settings import CHAIN_POLL_INTERVAL, DASHBOARD_REFRESH_INTERVAL
+from config.settings import CHAIN_POLL_INTERVAL, DASHBOARD_REFRESH_INTERVAL, TELEGRAM_ENABLED
+from src.notifications.telegram import send_telegram
 
 
 st.title("Settings")
@@ -64,4 +65,29 @@ st.markdown(f"""
 | Dashboard Refresh | {DASHBOARD_REFRESH_INTERVAL}s |
 | Nifty Lot Size | {INSTRUMENTS['NIFTY']['contract_multiplier']} |
 | Sensex Lot Size | {INSTRUMENTS['SENSEX']['contract_multiplier']} |
+| Telegram Alerts | {'Enabled' if TELEGRAM_ENABLED else 'Disabled'} |
 """)
+
+# Telegram settings
+st.subheader("Telegram Alerts")
+st.markdown("""
+**Setup instructions:**
+1. Message **@BotFather** on Telegram → `/newbot` → get your **BOT_TOKEN**
+2. Message your bot, then visit `https://api.telegram.org/bot<TOKEN>/getUpdates` to find your **CHAT_ID**
+3. Add to **Streamlit Secrets** (Settings → Secrets):
+```toml
+TELEGRAM_BOT_TOKEN = "your_bot_token"
+TELEGRAM_CHAT_ID = "your_chat_id"
+```
+""")
+
+st.markdown("**You will receive alerts for:**")
+st.markdown("- Gamma Blast signals (entry/SL/target with model breakdown)")
+st.markdown("- Sustained directional moves (bullish or bearish, NOT consolidation)")
+
+if st.button("Send Test Alert"):
+    msg = "\U0001F514 <b>Test Alert</b>\n\nTelegram alerts are working! You will receive:\n\n• Gamma Blast signals\n• Directional trend alerts"
+    if send_telegram(msg):
+        st.success("Test alert sent! Check your Telegram.")
+    else:
+        st.error("Failed to send. Check that TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set in Secrets.")

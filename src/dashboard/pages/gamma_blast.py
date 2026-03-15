@@ -34,6 +34,10 @@ from config.settings import (
     BLAST_MAX_SIGNALS_PER_DAY,
     EXPIRY_DAY_POLL_INTERVAL,
     DASHBOARD_REFRESH_INTERVAL,
+    TELEGRAM_ENABLED,
+    TREND_ALERT_MIN_CONSECUTIVE,
+    TREND_ALERT_MIN_MOVE_PCT,
+    TREND_ALERT_COOLDOWN_MINUTES,
 )
 from config.settings import UPSTOX_BASE_URL
 from src.auth.upstox_auth import load_access_token
@@ -46,6 +50,11 @@ from src.dashboard.components.blast_card import (
     render_blast_alert,
     render_blast_components,
     render_no_blast_status,
+)
+from src.notifications.telegram import (
+    send_blast_alert,
+    DirectionalTracker,
+    send_directional_alert,
 )
 
 st.title("Gamma Blast Scalper")
@@ -133,6 +142,14 @@ if "blast_price_history" not in st.session_state:
     st.session_state.blast_price_history = []
 if "blast_vix_value" not in st.session_state:
     st.session_state.blast_vix_value = None
+if "directional_tracker" not in st.session_state:
+    st.session_state.directional_tracker = DirectionalTracker(
+        min_consecutive=TREND_ALERT_MIN_CONSECUTIVE,
+        min_move_pct=TREND_ALERT_MIN_MOVE_PCT,
+        cooldown_minutes=TREND_ALERT_COOLDOWN_MINUTES,
+    )
+if "blast_alert_sent_ids" not in st.session_state:
+    st.session_state.blast_alert_sent_ids = set()
 
 # Reset daily counters if new day
 if st.session_state.blast_last_date != today_ist().isoformat():
@@ -224,6 +241,17 @@ row2[3].metric("Trend", trend_arrow, delta=f"{trend_data['strength']:.0%} streng
                delta_color="normal" if trend_data["trend"] == "bullish" else (
                    "inverse" if trend_data["trend"] == "bearish" else "off"))
 
+# Directional trend Telegram alert (sustained bullish/bearish only, not consolidation)
+if TELEGRAM_ENABLED:
+    dir_alert = st.session_state.directional_tracker.update(
+        trend_data=trend_data,
+        spot_price=spot_price,
+        instrument=instrument_name,
+    )
+    if dir_alert is not None:
+        send_directional_alert(dir_alert)
+        st.toast(f"Directional {trend_data['trend']} alert sent to Telegram!")
+
 st.markdown("---")
 
 # Run gamma blast detection with all filters
@@ -249,6 +277,13 @@ if blast is not None:
     st.session_state.blast_fired_today += 1
     st.session_state.blast_last_time = blast.timestamp
     st.session_state.blast_history.append(blast)
+
+    # Send Telegram alert (only once per blast, keyed by timestamp)
+    blast_id = f"{blast.instrument}_{blast.timestamp.isoformat()}"
+    if TELEGRAM_ENABLED and blast_id not in st.session_state.blast_alert_sent_ids:
+        if send_blast_alert(blast):
+            st.session_state.blast_alert_sent_ids.add(blast_id)
+            st.toast("Telegram alert sent!")
 
     render_blast_alert(blast)
 

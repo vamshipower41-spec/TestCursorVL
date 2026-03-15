@@ -57,3 +57,17 @@ BLAST_COOLDOWN_MINUTES = 30
 
 # Expiry day polling interval (faster than normal)
 EXPIRY_DAY_POLL_INTERVAL = 60  # 1 minute on expiry day
+
+# --- Telegram Alert Settings ---
+
+# Enable/disable Telegram notifications
+TELEGRAM_ENABLED = True
+
+# Directional trend alerts: consecutive same-direction readings required
+TREND_ALERT_MIN_CONSECUTIVE = 3
+
+# Directional trend alerts: minimum price move (%) to confirm direction
+TREND_ALERT_MIN_MOVE_PCT = 0.003  # 0.3%
+
+# Directional trend alerts: cooldown between alerts (minutes)
+TREND_ALERT_COOLDOWN_MINUTES = 30
