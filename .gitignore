@@ -10,3 +10,4 @@ data/cache/
 .venv/
 venv/
 .pytest_cache/
+.streamlit/secrets.toml

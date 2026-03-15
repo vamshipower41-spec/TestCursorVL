@@ -9,16 +9,26 @@ from config.settings import UPSTOX_BASE_URL
 
 
 def load_access_token(env_path: str = ".env") -> str:
-    """Load the Upstox access token from .env file.
+    """Load the Upstox access token from .env file or Streamlit secrets.
 
+    Checks in order: .env file → Streamlit secrets → environment variable.
     Raises ValueError if the token is missing or is the placeholder default.
     """
     load_dotenv(env_path)
     token = os.getenv("UPSTOX_ACCESS_TOKEN", "")
+
+    # Fallback: try Streamlit secrets (used on Streamlit Community Cloud)
+    if not token or token == "your_daily_access_token_here":
+        try:
+            import streamlit as st
+            token = st.secrets.get("UPSTOX_ACCESS_TOKEN", "")
+        except Exception:
+            pass
+
     if not token or token == "your_daily_access_token_here":
         raise ValueError(
             "UPSTOX_ACCESS_TOKEN not set. "
-            "Update your .env file with today's access token."
+            "Update your .env file or Streamlit secrets with today's access token."
         )
     return token
 
