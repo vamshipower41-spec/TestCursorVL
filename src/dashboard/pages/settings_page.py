@@ -3,7 +3,10 @@
 import sys
 from pathlib import Path as _Path
 
-_project_root = str(_Path(__file__).resolve().parent.parent.parent.parent)
+try:
+    _project_root = str(_Path(__file__).resolve().parent.parent.parent.parent)
+except NameError:
+    _project_root = "."
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 

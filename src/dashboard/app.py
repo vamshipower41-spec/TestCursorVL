@@ -4,8 +4,12 @@ Run with: streamlit run src/dashboard/app.py
 """
 
 import sys
+from pathlib import Path as _Path
 
-sys.path.insert(0, ".")
+# Resolve project root from this file: src/dashboard/app.py -> project root
+_project_root = str(_Path(__file__).resolve().parent.parent.parent)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 import streamlit as st
 

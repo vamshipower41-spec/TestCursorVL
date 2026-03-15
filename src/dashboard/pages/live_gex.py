@@ -6,7 +6,10 @@ Optimized for mobile/tablet with stacked layout and touch-friendly elements.
 import sys
 from pathlib import Path
 
-_project_root = str(Path(__file__).resolve().parent.parent.parent.parent)
+try:
+    _project_root = str(Path(__file__).resolve().parent.parent.parent.parent)
+except NameError:
+    _project_root = "."
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 

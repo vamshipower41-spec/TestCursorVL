@@ -9,7 +9,11 @@ import sys
 from pathlib import Path
 
 # Resolve project root relative to this file (src/dashboard/pages/gamma_blast.py)
-_project_root = str(Path(__file__).resolve().parent.parent.parent.parent)
+try:
+    _project_root = str(Path(__file__).resolve().parent.parent.parent.parent)
+except NameError:
+    # __file__ may not be defined when run via exec()
+    _project_root = "."
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
