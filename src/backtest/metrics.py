@@ -7,6 +7,66 @@ import pandas as pd
 from src.backtest.runner import BacktestResult
 
 
+def compute_trade_details(results: list[BacktestResult]) -> pd.DataFrame:
+    """Build a detailed trade log DataFrame for verification.
+
+    Each row = one trade with strike, CE/PE, entry/exit LTP, P&L, etc.
+    """
+    records = []
+    for result in results:
+        for trade in result.trades:
+            records.append({
+                "Expiry": result.expiry_date,
+                "Time": trade.entry_time.strftime("%H:%M") if trade.entry_time else "",
+                "Signal": trade.signal_type,
+                "Direction": trade.direction or "neutral",
+                "Strength": trade.signal_strength,
+                "Spot Entry": trade.spot_at_entry,
+                "Spot Exit": trade.spot_at_exit,
+                "Strike": trade.strike_price,
+                "CE/PE": trade.option_type,
+                "Entry LTP": trade.entry_ltp,
+                "Exit LTP": trade.exit_ltp,
+                "P&L (pts)": trade.pnl_points,
+                "P&L %": trade.pnl_pct,
+                "Predicted Level": trade.predicted_level,
+                "Hit Target": trade.hit_target,
+                "Reason": trade.reason,
+            })
+
+    if not records:
+        return pd.DataFrame()
+
+    return pd.DataFrame(records)
+
+
+def compute_trade_summary(results: list[BacktestResult]) -> dict:
+    """Aggregate trade-level P&L summary."""
+    trades = [t for r in results for t in r.trades]
+    if not trades:
+        return {
+            "total_trades": 0, "winners": 0, "losers": 0,
+            "win_rate": 0.0, "total_pnl_pts": 0.0,
+            "avg_win_pts": 0.0, "avg_loss_pts": 0.0,
+            "best_trade_pts": 0.0, "worst_trade_pts": 0.0,
+        }
+
+    winners = [t for t in trades if t.pnl_points > 0]
+    losers = [t for t in trades if t.pnl_points <= 0]
+
+    return {
+        "total_trades": len(trades),
+        "winners": len(winners),
+        "losers": len(losers),
+        "win_rate": len(winners) / max(len(trades), 1),
+        "total_pnl_pts": sum(t.pnl_points for t in trades),
+        "avg_win_pts": sum(t.pnl_points for t in winners) / max(len(winners), 1),
+        "avg_loss_pts": sum(t.pnl_points for t in losers) / max(len(losers), 1),
+        "best_trade_pts": max((t.pnl_points for t in trades), default=0.0),
+        "worst_trade_pts": min((t.pnl_points for t in trades), default=0.0),
+    }
+
+
 def compute_signal_metrics(results: list[BacktestResult]) -> pd.DataFrame:
     """Compute per-signal-type metrics across all backtest results.
 
