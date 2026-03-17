@@ -56,6 +56,7 @@ from src.notifications.telegram import (
     DirectionalTracker,
     send_directional_alert,
 )
+from src.backtest.data_store import HistoricalDataStore
 
 st.title("Gamma Blast Scalper")
 
@@ -181,6 +182,14 @@ profile = build_gex_profile(
     chain_df_filtered, spot_price, inst["contract_multiplier"],
     instrument_name, expiry_date,
 )
+
+# Auto-save chain snapshot on expiry days for backtesting
+if is_expiry:
+    try:
+        _hist_store = HistoricalDataStore()
+        _hist_store.save_snapshot(instrument_name, expiry_date, now_ist(), chain_df_filtered, spot_price)
+    except Exception:
+        pass  # Non-blocking — don't break dashboard if save fails
 
 # Track price history for trend filter
 st.session_state.blast_price_history.append(spot_price)
