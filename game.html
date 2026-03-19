@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Kingdom Defense - Base Builder</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background: #1a1a2e; color: #fff; font-family: Arial, sans-serif;
+  overflow: hidden; touch-action: none; user-select: none;
+  width: 100vw; height: 100vh; display: flex; flex-direction: column;
+}
+
+/* Top HUD */
+#hud {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px; background: #16213e; border-bottom: 2px solid #0f3460;
+  min-height: 50px; flex-shrink: 0; z-index: 10;
+}
+.resource {
+  display: flex; align-items: center; gap: 6px;
+  background: #0f3460; padding: 6px 14px; border-radius: 20px;
+  font-weight: bold; font-size: 16px;
+}
+.resource .icon { font-size: 20px; }
+#wave-info {
+  font-size: 14px; text-align: center; color: #e0e0e0;
+}
+
+/* Canvas area */
+#game-area {
+  flex: 1; position: relative; overflow: hidden;
+  background: #2d5a27;
+}
+#gameCanvas {
+  display: block; width: 100%; height: 100%;
+}
+
+/* Bottom build menu */
+#build-menu {
+  display: flex; gap: 8px; padding: 8px 12px;
+  background: #16213e; border-top: 2px solid #0f3460;
+  overflow-x: auto; min-height: 80px; flex-shrink: 0;
+  align-items: center; z-index: 10;
+}
+.build-btn {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; min-width: 70px; padding: 8px 6px;
+  background: #0f3460; border: 2px solid #533483;
+  border-radius: 10px; color: #fff; font-size: 11px;
+  cursor: pointer; flex-shrink: 0;
+}
+.build-btn.selected { border-color: #e94560; background: #1a1a4e; }
+.build-btn .b-icon { font-size: 24px; margin-bottom: 2px; }
+.build-btn .b-cost { font-size: 10px; color: #ffd700; }
+
+/* Battle button */
+#battle-btn {
+  padding: 10px 18px; background: #e94560; border: none;
+  border-radius: 10px; color: #fff; font-size: 14px;
+  font-weight: bold; cursor: pointer; flex-shrink: 0;
+}
+#battle-btn:disabled { background: #555; }
+
+/* Info panel */
+#info-panel {
+  display: none; position: absolute; bottom: 90px; left: 50%;
+  transform: translateX(-50%); background: rgba(15,52,96,0.95);
+  padding: 12px 20px; border-radius: 12px; border: 2px solid #533483;
+  text-align: center; font-size: 14px; z-index: 20; min-width: 200px;
+}
+#info-panel .info-title { font-size: 18px; font-weight: bold; margin-bottom: 4px; }
+#info-panel .info-stats { color: #ccc; margin-bottom: 8px; }
+.info-btn {
+  padding: 6px 16px; margin: 4px; border: none; border-radius: 8px;
+  font-size: 13px; font-weight: bold; cursor: pointer;
+}
+.upgrade-btn { background: #ffd700; color: #000; }
+.sell-btn { background: #e94560; color: #fff; }
+.close-btn { background: #555; color: #fff; }
+
+/* Overlay screens */
+.overlay {
+  display: none; position: absolute; top: 0; left: 0;
+  width: 100%; height: 100%; background: rgba(0,0,0,0.8);
+  z-index: 50; justify-content: center; align-items: center;
+  flex-direction: column; text-align: center; padding: 20px;
+}
+.overlay h1 { font-size: 36px; margin-bottom: 10px; }
+.overlay p { font-size: 18px; color: #ccc; margin-bottom: 20px; }
+.overlay button {
+  padding: 14px 30px; font-size: 18px; border: none;
+  border-radius: 12px; cursor: pointer; font-weight: bold;
+}
+</style>
+</head>
+<body>
+
+<!-- HUD -->
+<div id="hud">
+  <div class="resource"><span class="icon">🪙</span><span id="gold-display">500</span></div>
+  <div id="wave-info">Wave: 0 | Tap a building to place</div>
+  <div class="resource"><span class="icon">💎</span><span id="elixir-display">500</span></div>
+</div>
+
+<!-- Game Canvas -->
+<div id="game-area">
+  <canvas id="gameCanvas"></canvas>
+  <div id="info-panel"></div>
+  <div class="overlay" id="battle-overlay">
+    <h1 id="battle-title">Victory!</h1>
+    <p id="battle-msg">You earned 200 gold and 150 elixir!</p>
+    <button onclick="closeBattleOverlay()" style="background:#e94560;color:#fff;">Continue</button>
+  </div>
+  <div class="overlay" id="start-overlay" style="display:flex;">
+    <h1>⚔️ Kingdom Defense</h1>
+    <p>Build your base. Defend against enemies. Upgrade everything!</p>
+    <p style="font-size:14px;color:#aaa;">No purchases needed - earn everything by playing!</p>
+    <button onclick="startGame()" style="background:#e94560;color:#fff;">Start Game</button>
+  </div>
+</div>
+
+<!-- Build Menu -->
+<div id="build-menu">
+  <div class="build-btn" onclick="selectBuilding('cannon')" id="btn-cannon">
+    <span class="b-icon">🔫</span>Cannon<span class="b-cost">🪙80</span>
+  </div>
+  <div class="build-btn" onclick="selectBuilding('archer')" id="btn-archer">
+    <span class="b-icon">🏹</span>Archer<span class="b-cost">🪙100</span>
+  </div>
+  <div class="build-btn" onclick="selectBuilding('goldmine')" id="btn-goldmine">
+    <span class="b-icon">⛏️</span>Mine<span class="b-cost">🪙60</span>
+  </div>
+  <div class="build-btn" onclick="selectBuilding('elixircoll')" id="btn-elixircoll">
+    <span class="b-icon">🧪</span>Elixir<span class="b-cost">💎50</span>
+  </div>
+  <div class="build-btn" onclick="selectBuilding('wall')" id="btn-wall">
+    <span class="b-icon">🧱</span>Wall<span class="b-cost">🪙30</span>
+  </div>
+  <div class="build-btn" onclick="selectBuilding('mortar')" id="btn-mortar">
+    <span class="b-icon">💣</span>Mortar<span class="b-cost">💎120</span>
+  </div>
+  <button id="battle-btn" onclick="startBattle()">⚔️ Battle!</button>
+</div>
+
+<script>
+// ============ GAME STATE ============
+const GRID_COLS = 15, GRID_ROWS = 12;
+let tileSize = 40;
+let offsetX = 0, offsetY = 0;
+
+const game = {
+  gold: 500, elixir: 500, wave: 0,
+  grid: [], buildings: [], enemies: [], projectiles: [],
+  selectedBuilding: null, battleActive: false,
+  lastTime: 0, started: false
+};
+
+// Building definitions
+const BUILDING_DEFS = {
+  townhall: { name:'Town Hall', icon:'🏰', hp:500, cost:0, costType:'gold', w:2, h:2, color:'#c0a040' },
+  cannon:   { name:'Cannon', icon:'🔫', hp:150, cost:80, costType:'gold', w:1, h:1, color:'#666', damage:20, range:3, fireRate:1.5 },
+  archer:   { name:'Archer Tower', icon:'🏹', hp:120, cost:100, costType:'gold', w:1, h:1, color:'#8B4513', damage:12, range:4, fireRate:1.0 },
+  goldmine: { name:'Gold Mine', icon:'⛏️', hp:100, cost:60, costType:'gold', w:1, h:1, color:'#DAA520', income:5, incomeType:'gold' },
+  elixircoll:{ name:'Elixir Collector', icon:'🧪', hp:100, cost:50, costType:'elixir', w:1, h:1, color:'#9932CC', income:5, incomeType:'elixir' },
+  wall:     { name:'Wall', icon:'🧱', hp:300, cost:30, costType:'gold', w:1, h:1, color:'#808080' },
+  mortar:   { name:'Mortar', icon:'💣', hp:100, cost:120, costType:'elixir', w:1, h:1, color:'#444', damage:40, range:5, fireRate:3.0, splash:1.5 }
+};
+
+// Enemy definitions
+const ENEMY_DEFS = {
+  barbarian: { name:'Barbarian', hp:80, speed:1.2, damage:10, reward:10, color:'#e0c040', size:0.6 },
+  archer:    { name:'Archer', hp:50, speed:1.5, damage:8, reward:12, color:'#ff69b4', size:0.5 },
+  giant:     { name:'Giant', hp:250, speed:0.6, damage:25, reward:25, color:'#ff4444', size:0.8 }
+};
+
+// ============ CANVAS SETUP ============
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+function resizeCanvas() {
+  const area = document.getElementById('game-area');
+  canvas.width = area.clientWidth;
+  canvas.height = area.clientHeight;
+  tileSize = Math.min(
+    Math.floor(canvas.width / (GRID_COLS + 1)),
+    Math.floor(canvas.height / (GRID_ROWS + 1))
+  );
+  offsetX = Math.floor((canvas.width - GRID_COLS * tileSize) / 2);
+  offsetY = Math.floor((canvas.height - GRID_ROWS * tileSize) / 2);
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// ============ GRID INIT ============
+function initGrid() {
+  game.grid = [];
+  for (let r = 0; r < GRID_ROWS; r++) {
+    game.grid[r] = [];
+    for (let c = 0; c < GRID_COLS; c++) {
+      game.grid[r][c] = null;
+    }
+  }
+  // Place Town Hall in center
+  const tr = Math.floor(GRID_ROWS/2) - 1;
+  const tc = Math.floor(GRID_COLS/2) - 1;
+  placeBuilding('townhall', tc, tr);
+}
+
+// ============ BUILDING SYSTEM ============
+function placeBuilding(type, gridX, gridY) {
+  const def = BUILDING_DEFS[type];
+  for (let dy = 0; dy < def.h; dy++) {
+    for (let dx = 0; dx < def.w; dx++) {
+      if (gridY+dy >= GRID_ROWS || gridX+dx >= GRID_COLS) return false;
+      if (game.grid[gridY+dy][gridX+dx] !== null) return false;
+    }
+  }
+  const building = {
+    type, gridX, gridY, level: 1,
+    hp: def.hp, maxHp: def.hp,
+    fireCooldown: 0, id: Date.now() + Math.random()
+  };
+  game.buildings.push(building);
+  for (let dy = 0; dy < def.h; dy++) {
+    for (let dx = 0; dx < def.w; dx++) {
+      game.grid[gridY+dy][gridX+dx] = building.id;
+    }
+  }
+  return true;
+}
+
+function canAfford(type) {
+  const def = BUILDING_DEFS[type];
+  return def.costType === 'gold' ? game.gold >= def.cost : game.elixir >= def.cost;
+}
+
+function spendResources(type) {
+  const def = BUILDING_DEFS[type];
+  if (def.costType === 'gold') game.gold -= def.cost;
+  else game.elixir -= def.cost;
+}
+
+function selectBuilding(type) {
+  document.querySelectorAll('.build-btn').forEach(b => b.classList.remove('selected'));
+  if (game.selectedBuilding === type) {
+    game.selectedBuilding = null;
+  } else {
+    game.selectedBuilding = type;
+    const btn = document.getElementById('btn-' + type);
+    if (btn) btn.classList.add('selected');
+  }
+  hideInfoPanel();
+}
+
+// ============ INPUT HANDLING ============
+function getGridPos(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  const gx = Math.floor((x - offsetX) / tileSize);
+  const gy = Math.floor((y - offsetY) / tileSize);
+  return { gx, gy };
+}
+
+canvas.addEventListener('click', handleTap);
+canvas.addEventListener('touchend', (e) => {
+  e.preventDefault();
+  const t = e.changedTouches[0];
+  handleTap({ clientX: t.clientX, clientY: t.clientY });
+});
+
+function handleTap(e) {
+  if (!game.started || game.battleActive) return;
+  const { gx, gy } = getGridPos(e.clientX, e.clientY);
+  if (gx < 0 || gx >= GRID_COLS || gy < 0 || gy >= GRID_ROWS) return;
+
+  if (game.selectedBuilding) {
+    if (!canAfford(game.selectedBuilding)) return;
+    if (placeBuilding(game.selectedBuilding, gx, gy)) {
+      spendResources(game.selectedBuilding);
+      updateHUD();
+      saveGame();
+    }
+  } else {
+    // Tap on existing building to show info
+    const cellId = game.grid[gy][gx];
+    if (cellId !== null) {
+      const bld = game.buildings.find(b => b.id === cellId);
+      if (bld) showInfoPanel(bld);
+    } else {
+      hideInfoPanel();
+    }
+  }
+}
+
+// ============ INFO PANEL ============
+function showInfoPanel(bld) {
+  const def = BUILDING_DEFS[bld.type];
+  const upgCost = Math.floor(def.cost * bld.level * 1.5) || 50;
+  const sellVal = Math.floor((def.cost * bld.level) / 2);
+  const panel = document.getElementById('info-panel');
+
+  let stats = `HP: ${bld.hp}/${bld.maxHp} | Lv: ${bld.level}`;
+  if (def.damage) stats += ` | Dmg: ${Math.floor(def.damage * (1 + (bld.level-1)*0.3))}`;
+  if (def.income) stats += ` | Income: ${Math.floor(def.income * (1 + (bld.level-1)*0.4))}/s`;
+
+  let btns = '';
+  if (bld.type !== 'townhall') {
+    btns += `<button class="info-btn upgrade-btn" onclick="upgradeBuilding('${bld.id}')">⬆️ Upgrade (🪙${upgCost})</button>`;
+    btns += `<button class="info-btn sell-btn" onclick="sellBuilding('${bld.id}')">Sell (+🪙${sellVal})</button>`;
+  }
+  btns += `<button class="info-btn close-btn" onclick="hideInfoPanel()">Close</button>`;
+
+  panel.innerHTML = `
+    <div class="info-title">${def.icon} ${def.name}</div>
+    <div class="info-stats">${stats}</div>
+    ${btns}
+  `;
+  panel.style.display = 'block';
+}
+
+function hideInfoPanel() {
+  document.getElementById('info-panel').style.display = 'none';
+}
+
+function upgradeBuilding(id) {
+  const bld = game.buildings.find(b => String(b.id) === String(id));
+  if (!bld) return;
+  const def = BUILDING_DEFS[bld.type];
+  const cost = Math.floor(def.cost * bld.level * 1.5) || 50;
+  if (game.gold < cost) return;
+  game.gold -= cost;
+  bld.level++;
+  bld.maxHp = Math.floor(def.hp * (1 + (bld.level-1) * 0.4));
+  bld.hp = bld.maxHp;
+  updateHUD();
+  showInfoPanel(bld);
+  saveGame();
+}
+
+function sellBuilding(id) {
+  const idx = game.buildings.findIndex(b => String(b.id) === String(id));
+  if (idx === -1) return;
+  const bld = game.buildings[idx];
+  const def = BUILDING_DEFS[bld.type];
+  if (bld.type === 'townhall') return;
+  const refund = Math.floor((def.cost * bld.level) / 2);
+  game.gold += refund;
+  for (let dy = 0; dy < def.h; dy++) {
+    for (let dx = 0; dx < def.w; dx++) {
+      game.grid[bld.gridY+dy][bld.gridX+dx] = null;
+    }
+  }
+  game.buildings.splice(idx, 1);
+  hideInfoPanel();
+  updateHUD();
+  saveGame();
+}
+
+// ============ RESOURCE INCOME ============
+function updateResources(dt) {
+  game.buildings.forEach(bld => {
+    const def = BUILDING_DEFS[bld.type];
+    if (def.income && bld.hp > 0) {
+      const amount = def.income * (1 + (bld.level-1) * 0.4) * dt;
+      if (def.incomeType === 'gold') game.gold += amount;
+      else game.elixir += amount;
+    }
+  });
+}
+
+// ============ BATTLE SYSTEM ============
+function startBattle() {
+  if (game.battleActive) return;
+  game.battleActive = true;
+  game.wave++;
+  game.enemies = [];
+  game.projectiles = [];
+  document.getElementById('battle-btn').disabled = true;
+  hideInfoPanel();
+  game.selectedBuilding = null;
+  document.querySelectorAll('.build-btn').forEach(b => b.classList.remove('selected'));
+
+  // Spawn enemies based on wave
+  const count = 3 + game.wave * 2;
+  const types = ['barbarian'];
+  if (game.wave >= 2) types.push('archer');
+  if (game.wave >= 4) types.push('giant');
+
+  for (let i = 0; i < count; i++) {
+    const type = types[Math.floor(Math.random() * types.length)];
+    const def = ENEMY_DEFS[type];
+    // Spawn from random edge
+    const side = Math.floor(Math.random() * 4);
+    let ex, ey;
+    if (side === 0) { ex = -1; ey = Math.random() * GRID_ROWS; }
+    else if (side === 1) { ex = GRID_COLS; ey = Math.random() * GRID_ROWS; }
+    else if (side === 2) { ex = Math.random() * GRID_COLS; ey = -1; }
+    else { ex = Math.random() * GRID_COLS; ey = GRID_ROWS; }
+
+    const waveScale = 1 + (game.wave - 1) * 0.15;
+    game.enemies.push({
+      type, x: ex, y: ey,
+      hp: Math.floor(def.hp * waveScale),
+      maxHp: Math.floor(def.hp * waveScale),
+      speed: def.speed, damage: def.damage,
+      reward: def.reward, size: def.size,
+      attackCooldown: 0, targetId: null,
+      spawnDelay: i * 0.5
+    });
+  }
+  updateHUD();
+}
+
+function updateBattle(dt) {
+  if (!game.battleActive) return;
+
+  // Find town hall position for targeting
+  const th = game.buildings.find(b => b.type === 'townhall');
+  const thX = th ? th.gridX + 1 : GRID_COLS / 2;
+  const thY = th ? th.gridY + 1 : GRID_ROWS / 2;
+
+  // Update enemies
+  game.enemies.forEach(enemy => {
+    if (enemy.hp <= 0) return;
+    enemy.spawnDelay -= dt;
+    if (enemy.spawnDelay > 0) return;
+
+    // Find nearest building to attack
+    let nearest = null, nearDist = Infinity;
+    game.buildings.forEach(bld => {
+      if (bld.hp <= 0) return;
+      const def = BUILDING_DEFS[bld.type];
+      const cx = bld.gridX + def.w / 2;
+      const cy = bld.gridY + def.h / 2;
+      const d = Math.hypot(enemy.x - cx, enemy.y - cy);
+      if (d < nearDist) { nearDist = d; nearest = bld; }
+    });
+
+    if (!nearest) return;
+    const ndef = BUILDING_DEFS[nearest.type];
+    const tx = nearest.gridX + ndef.w / 2;
+    const ty = nearest.gridY + ndef.h / 2;
+
+    if (nearDist < 0.8) {
+      // Attack building
+      enemy.attackCooldown -= dt;
+      if (enemy.attackCooldown <= 0) {
+        nearest.hp -= enemy.damage;
+        enemy.attackCooldown = 1.0;
+        if (nearest.hp <= 0) {
+          nearest.hp = 0;
+          // Remove from grid
+          for (let dy = 0; dy < ndef.h; dy++) {
+            for (let dx = 0; dx < ndef.w; dx++) {
+              game.grid[nearest.gridY+dy][nearest.gridX+dx] = null;
+            }
+          }
+        }
+      }
+    } else {
+      // Move toward target
+      const angle = Math.atan2(ty - enemy.y, tx - enemy.x);
+      enemy.x += Math.cos(angle) * enemy.speed * dt;
+      enemy.y += Math.sin(angle) * enemy.speed * dt;
+    }
+  });
+
+  // Defense towers shoot
+  game.buildings.forEach(bld => {
+    if (bld.hp <= 0) return;
+    const def = BUILDING_DEFS[bld.type];
+    if (!def.damage) return;
+    bld.fireCooldown -= dt;
+    if (bld.fireCooldown > 0) return;
+
+    const bx = bld.gridX + def.w / 2;
+    const by = bld.gridY + def.h / 2;
+    const range = def.range * (1 + (bld.level-1) * 0.15);
+    const dmg = def.damage * (1 + (bld.level-1) * 0.3);
+
+    let target = null, tDist = Infinity;
+    game.enemies.forEach(e => {
+      if (e.hp <= 0 || e.spawnDelay > 0) return;
+      const d = Math.hypot(e.x - bx, e.y - by);
+      if (d <= range && d < tDist) { tDist = d; target = e; }
+    });
+
+    if (target) {
+      bld.fireCooldown = def.fireRate;
+      game.projectiles.push({
+        x: bx, y: by, tx: target.x, ty: target.y,
+        speed: 8, damage: dmg, splash: def.splash || 0,
+        life: 2
+      });
+    }
+  });
+
+  // Update projectiles
+  game.projectiles.forEach(p => {
+    const angle = Math.atan2(p.ty - p.y, p.tx - p.x);
+    const dist = Math.hypot(p.tx - p.x, p.ty - p.y);
+    if (dist < 0.3) {
+      // Hit
+      if (p.splash > 0) {
+        game.enemies.forEach(e => {
+          if (e.hp > 0 && Math.hypot(e.x - p.x, e.y - p.y) <= p.splash) {
+            e.hp -= p.damage;
+          }
+        });
+      } else {
+        const hit = game.enemies.find(e => e.hp > 0 && Math.hypot(e.x - p.x, e.y - p.y) < 0.5);
+        if (hit) hit.hp -= p.damage;
+      }
+      p.life = 0;
+    } else {
+      p.x += Math.cos(angle) * p.speed * dt;
+      p.y += Math.sin(angle) * p.speed * dt;
+    }
+    p.life -= dt;
+  });
+  game.projectiles = game.projectiles.filter(p => p.life > 0);
+
+  // Collect rewards and check if battle over
+  let allDead = true;
+  game.enemies.forEach(e => {
+    if (e.hp <= 0 && e.reward > 0) {
+      game.gold += e.reward;
+      game.elixir += Math.floor(e.reward * 0.7);
+      e.reward = 0;
+    }
+    if (e.hp > 0) allDead = false;
+  });
+
+  // Check if town hall destroyed
+  if (th && th.hp <= 0) {
+    endBattle(false);
+    return;
+  }
+
+  if (allDead && game.enemies.every(e => e.spawnDelay <= 0)) {
+    endBattle(true);
+  }
+}
+
+function endBattle(victory) {
+  game.battleActive = false;
+  document.getElementById('battle-btn').disabled = false;
+  game.enemies = [];
+  game.projectiles = [];
+
+  if (victory) {
+    const bonus = game.wave * 50;
+    game.gold += bonus;
+    game.elixir += Math.floor(bonus * 0.7);
+    document.getElementById('battle-title').textContent = '🎉 Victory!';
+    document.getElementById('battle-msg').textContent =
+      `Wave ${game.wave} defeated! Bonus: +${bonus} gold, +${Math.floor(bonus*0.7)} elixir`;
+  } else {
+    document.getElementById('battle-title').textContent = '💀 Defeated!';
+    document.getElementById('battle-msg').textContent =
+      `Your Town Hall was destroyed! Rebuilding... Wave reset.`;
+    // Rebuild town hall
+    const tr = Math.floor(GRID_ROWS/2) - 1;
+    const tc = Math.floor(GRID_COLS/2) - 1;
+    const th = game.buildings.find(b => b.type === 'townhall');
+    if (th) {
+      th.hp = BUILDING_DEFS.townhall.hp;
+      for (let dy = 0; dy < 2; dy++)
+        for (let dx = 0; dx < 2; dx++)
+          game.grid[th.gridY+dy][th.gridX+dx] = th.id;
+    }
+    // Repair all buildings to half HP
+    game.buildings.forEach(b => {
+      if (b.hp <= 0) {
+        const def = BUILDING_DEFS[b.type];
+        b.hp = Math.floor(b.maxHp / 2);
+        for (let dy = 0; dy < def.h; dy++)
+          for (let dx = 0; dx < def.w; dx++)
+            game.grid[b.gridY+dy][b.gridX+dx] = b.id;
+      }
+    });
+  }
+
+  document.getElementById('battle-overlay').style.display = 'flex';
+  updateHUD();
+  saveGame();
+}
+
+function closeBattleOverlay() {
+  document.getElementById('battle-overlay').style.display = 'none';
+}
+
+// ============ RENDERING ============
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Draw grass grid
+  for (let r = 0; r < GRID_ROWS; r++) {
+    for (let c = 0; c < GRID_COLS; c++) {
+      const x = offsetX + c * tileSize;
+      const y = offsetY + r * tileSize;
+      ctx.fillStyle = (r + c) % 2 === 0 ? '#3a7d32' : '#348a2c';
+      ctx.fillRect(x, y, tileSize, tileSize);
+      ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+      ctx.strokeRect(x, y, tileSize, tileSize);
+    }
+  }
+
+  // Draw buildings
+  const drawn = new Set();
+  game.buildings.forEach(bld => {
+    if (drawn.has(bld.id)) return;
+    drawn.add(bld.id);
+    const def = BUILDING_DEFS[bld.type];
+    const x = offsetX + bld.gridX * tileSize;
+    const y = offsetY + bld.gridY * tileSize;
+    const w = def.w * tileSize;
+    const h = def.h * tileSize;
+
+    if (bld.hp <= 0) {
+      ctx.fillStyle = 'rgba(80,80,80,0.5)';
+      ctx.fillRect(x+2, y+2, w-4, h-4);
+      return;
+    }
+
+    // Building body
+    ctx.fillStyle = def.color;
+    ctx.fillRect(x+2, y+2, w-4, h-4);
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.strokeRect(x+2, y+2, w-4, h-4);
+
+    // Icon
+    ctx.font = `${Math.min(tileSize * 0.7, 28)}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(def.icon, x + w/2, y + h/2);
+
+    // Level badge
+    if (bld.level > 1) {
+      ctx.font = '10px Arial';
+      ctx.fillStyle = '#ffd700';
+      ctx.fillText('Lv' + bld.level, x + w/2, y + h - 6);
+    }
+
+    // HP bar
+    if (bld.hp < bld.maxHp) {
+      const barW = w - 8;
+      const ratio = bld.hp / bld.maxHp;
+      ctx.fillStyle = '#333';
+      ctx.fillRect(x+4, y-6, barW, 4);
+      ctx.fillStyle = ratio > 0.5 ? '#4CAF50' : ratio > 0.25 ? '#FF9800' : '#f44336';
+      ctx.fillRect(x+4, y-6, barW * ratio, 4);
+    }
+
+    // Range indicator for selected defense
+    if (def.range && !game.battleActive) {
+      const range = def.range * (1 + (bld.level-1)*0.15) * tileSize;
+      ctx.beginPath();
+      ctx.arc(x + w/2, y + h/2, range, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+      ctx.stroke();
+    }
+  });
+
+  // Draw enemies
+  game.enemies.forEach(enemy => {
+    if (enemy.hp <= 0 || enemy.spawnDelay > 0) return;
+    const def = ENEMY_DEFS[enemy.type];
+    const ex = offsetX + enemy.x * tileSize;
+    const ey = offsetY + enemy.y * tileSize;
+    const sz = def.size * tileSize;
+
+    ctx.fillStyle = def.color;
+    ctx.beginPath();
+    ctx.arc(ex, ey, sz/2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // HP bar
+    const barW = sz;
+    const ratio = enemy.hp / enemy.maxHp;
+    ctx.fillStyle = '#333';
+    ctx.fillRect(ex - barW/2, ey - sz/2 - 6, barW, 3);
+    ctx.fillStyle = ratio > 0.5 ? '#4CAF50' : '#f44336';
+    ctx.fillRect(ex - barW/2, ey - sz/2 - 6, barW * ratio, 3);
+  });
+
+  // Draw projectiles
+  game.projectiles.forEach(p => {
+    const px = offsetX + p.x * tileSize;
+    const py = offsetY + p.y * tileSize;
+    ctx.fillStyle = '#ffaa00';
+    ctx.beginPath();
+    ctx.arc(px, py, 3, 0, Math.PI * 2);
+    ctx.fill();
+  });
+}
+
+// ============ HUD ============
+function updateHUD() {
+  document.getElementById('gold-display').textContent = Math.floor(game.gold);
+  document.getElementById('elixir-display').textContent = Math.floor(game.elixir);
+  let info = `Wave: ${game.wave}`;
+  if (game.battleActive) info += ' | ⚔️ BATTLE!';
+  else if (game.selectedBuilding) info += ` | Placing: ${BUILDING_DEFS[game.selectedBuilding].name}`;
+  else info += ' | Tap building to place';
+  document.getElementById('wave-info').textContent = info;
+}
+
+// ============ SAVE / LOAD ============
+function saveGame() {
+  const data = {
+    gold: game.gold, elixir: game.elixir, wave: game.wave,
+    buildings: game.buildings.map(b => ({
+      type: b.type, gridX: b.gridX, gridY: b.gridY,
+      level: b.level, hp: b.hp, maxHp: b.maxHp, id: b.id
+    }))
+  };
+  try { localStorage.setItem('kingdomDefenseSave', JSON.stringify(data)); } catch(e) {}
+}
+
+function loadGame() {
+  try {
+    const raw = localStorage.getItem('kingdomDefenseSave');
+    if (!raw) return false;
+    const data = JSON.parse(raw);
+    game.gold = data.gold;
+    game.elixir = data.elixir;
+    game.wave = data.wave;
+    // Rebuild grid
+    game.grid = [];
+    for (let r = 0; r < GRID_ROWS; r++) {
+      game.grid[r] = [];
+      for (let c = 0; c < GRID_COLS; c++) game.grid[r][c] = null;
+    }
+    game.buildings = [];
+    data.buildings.forEach(b => {
+      const def = BUILDING_DEFS[b.type];
+      if (!def) return;
+      const bld = {
+        type: b.type, gridX: b.gridX, gridY: b.gridY,
+        level: b.level, hp: b.hp, maxHp: b.maxHp,
+        id: b.id, fireCooldown: 0
+      };
+      game.buildings.push(bld);
+      for (let dy = 0; dy < def.h; dy++)
+        for (let dx = 0; dx < def.w; dx++)
+          game.grid[b.gridY+dy][b.gridX+dx] = bld.id;
+    });
+    return true;
+  } catch(e) { return false; }
+}
+
+// ============ GAME LOOP ============
+function gameLoop(timestamp) {
+  if (!game.started) { requestAnimationFrame(gameLoop); return; }
+  const dt = Math.min((timestamp - game.lastTime) / 1000, 0.1);
+  game.lastTime = timestamp;
+
+  updateResources(dt);
+  updateBattle(dt);
+  draw();
+  updateHUD();
+
+  requestAnimationFrame(gameLoop);
+}
+
+function startGame() {
+  document.getElementById('start-overlay').style.display = 'none';
+  game.started = true;
+  if (!loadGame()) {
+    initGrid();
+  }
+  game.lastTime = performance.now();
+  updateHUD();
+}
+
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
