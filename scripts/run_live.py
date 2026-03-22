@@ -25,6 +25,7 @@ from config.settings import (
     TREND_ALERT_MIN_CONSECUTIVE,
     TREND_ALERT_MIN_MOVE_PCT,
     TREND_ALERT_COOLDOWN_MINUTES,
+    UPSTOX_BASE_URL,
 )
 from src.auth.upstox_auth import load_access_token, validate_token
 from src.data.options_chain import OptionsChainFetcher
@@ -71,6 +72,7 @@ def run(instrument_name: str, interval: int, expiry_date: str | None,
     price_history: list[float] = []
     fired_today = 0
     last_blast_time: datetime | None = None
+    vix_value: float | None = None
 
     # Auto-save chain snapshots for backtesting (runs in background)
     hist_store = HistoricalDataStore()
@@ -104,6 +106,24 @@ def run(instrument_name: str, interval: int, expiry_date: str | None,
                 chain_df, spot_price, inst["contract_multiplier"],
                 instrument_name, expiry_date,
             )
+
+            # Fetch India VIX for VIX-dependent features
+            try:
+                import requests
+                vix_resp = requests.get(
+                    f"{UPSTOX_BASE_URL}/market-quote/quotes",
+                    params={"instrument_key": "NSE_INDEX|India VIX"},
+                    headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                    timeout=5,
+                )
+                if vix_resp.status_code == 200:
+                    vix_data = vix_resp.json().get("data", {})
+                    for v in vix_data.values():
+                        ltp = v.get("last_price", 0) or v.get("ltp", 0)
+                        if ltp > 0:
+                            vix_value = ltp
+            except Exception:
+                pass  # VIX fetch failure is non-critical
 
             tte = compute_time_to_expiry_hours(expiry_date)
             signals = generate_signals(profile, prev_profile, tte)
@@ -141,7 +161,7 @@ def run(instrument_name: str, interval: int, expiry_date: str | None,
                 fired_today=fired_today,
                 last_blast_time=last_blast_time,
                 price_history=price_history,
-                vix_value=None,
+                vix_value=vix_value,
                 expiry_date=expiry_date,
             )
 
