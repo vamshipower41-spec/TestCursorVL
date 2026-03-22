@@ -22,7 +22,7 @@ from datetime import datetime
 
 import requests
 
-from src.data.models import GammaBlast
+from src.data.models import GammaBlast, GEXProfile
 
 logger = logging.getLogger(__name__)
 
@@ -327,6 +327,209 @@ class DirectionalTracker:
 
 def send_directional_alert(message: str) -> bool:
     """Send a directional trend alert to Telegram."""
+    return send_telegram(message)
+
+
+# ---------------------------------------------------------------------------
+# Prepare Alert — early warning when price approaches blast zone with momentum
+# ---------------------------------------------------------------------------
+
+class PrepareAlertTracker:
+    """Early warning system: alerts BEFORE a blast fires so you have time to prepare.
+
+    Fires a Telegram "PREPARE" alert when BOTH conditions are met:
+    1. Price enters a zone near a key level (call wall, put wall, gamma flip, pin)
+    2. Blast model scores are warming up (composite 40-69 — building but not yet fired)
+
+    This gives you the alert BEFORE consecutive candles happen, so you're already
+    watching and ready to buy CALL/PUT when the move confirms.
+
+    Timing: You get the alert → open your broker → watch the candles → execute.
+    """
+
+    def __init__(
+        self,
+        zone_pct: float = 0.004,
+        min_warmup_score: float = 40.0,
+        cooldown_minutes: int = 10,
+        max_alerts_per_day: int = 8,
+    ):
+        self._zone_pct = zone_pct
+        self._min_warmup_score = min_warmup_score
+        self._cooldown_minutes = cooldown_minutes
+        self._max_alerts_per_day = max_alerts_per_day
+        self._alerts_today: int = 0
+        self._last_alert_time: datetime | None = None
+        self._last_alert_zone: str | None = None
+        self._last_reset_date: str | None = None
+
+    def update(
+        self,
+        spot_price: float,
+        profile: GEXProfile,
+        instrument: str,
+        readiness: dict,
+        timestamp: datetime | None = None,
+    ) -> str | None:
+        """Check if prepare alert should fire.
+
+        Args:
+            spot_price: Current spot price
+            profile: Current GEX profile with walls, gamma flip, etc.
+            instrument: "NIFTY" or "SENSEX"
+            readiness: Output from compute_blast_readiness() with keys:
+                       raw_score, direction, firing_models, top_model
+            timestamp: Current timestamp (defaults to now)
+
+        Returns:
+            Formatted Telegram message if alert triggered, None otherwise.
+        """
+        if timestamp is None:
+            from src.utils.ist import now_ist
+            timestamp = now_ist()
+
+        # Reset daily counters
+        today_str = timestamp.strftime("%Y-%m-%d")
+        if self._last_reset_date != today_str:
+            self._alerts_today = 0
+            self._last_alert_time = None
+            self._last_alert_zone = None
+            self._last_reset_date = today_str
+
+        if self._alerts_today >= self._max_alerts_per_day:
+            return None
+
+        # Condition 2: Models must be warming up (score 40+) but NOT yet fired (< 70)
+        raw_score = readiness.get("raw_score", 0)
+        direction = readiness.get("direction")
+        if raw_score < self._min_warmup_score or raw_score >= 70:
+            return None  # Too cold (nothing brewing) or already blast territory
+        if direction is None:
+            return None  # No clear direction yet
+
+        # Condition 1: Price must be in zone of a key level
+        key_levels = self._get_key_levels(profile)
+
+        for level_name, level_price, level_type in key_levels:
+            if level_price is None or level_price <= 0:
+                continue
+
+            distance_pct = abs(spot_price - level_price) / spot_price
+            if distance_pct > self._zone_pct:
+                continue
+
+            zone_id = f"{level_name}_{level_price:.0f}"
+
+            # Cooldown per zone
+            if self._last_alert_time is not None:
+                elapsed = (timestamp - self._last_alert_time).total_seconds() / 60
+                if elapsed < self._cooldown_minutes and self._last_alert_zone == zone_id:
+                    continue
+
+            # Determine CALL or PUT from direction + level type
+            trade_action = self._suggest_trade(direction, level_type, spot_price, level_price)
+            if trade_action is None:
+                continue
+
+            # Fire alert
+            self._alerts_today += 1
+            self._last_alert_time = timestamp
+            self._last_alert_zone = zone_id
+
+            return self._format_prepare_alert(
+                instrument=instrument,
+                trade_action=trade_action,
+                direction=direction,
+                spot_price=spot_price,
+                level_name=level_name,
+                level_price=level_price,
+                distance_pct=distance_pct,
+                raw_score=raw_score,
+                firing_models=readiness.get("firing_models", 0),
+                top_model=readiness.get("top_model", ""),
+                timestamp=timestamp,
+            )
+
+        return None
+
+    @staticmethod
+    def _get_key_levels(profile: GEXProfile) -> list[tuple[str, float | None, str]]:
+        """Extract key levels from GEX profile."""
+        levels = []
+        if profile.call_wall is not None:
+            levels.append(("Call Wall", profile.call_wall, "resistance"))
+        if profile.put_wall is not None:
+            levels.append(("Put Wall", profile.put_wall, "support"))
+        if profile.gamma_flip_level is not None:
+            levels.append(("Gamma Flip", profile.gamma_flip_level, "pivot"))
+        if profile.max_gamma_strike is not None:
+            levels.append(("Max Gamma Pin", profile.max_gamma_strike, "pin"))
+        for i, zgl in enumerate(profile.zero_gex_levels or []):
+            levels.append((f"Zero GEX #{i+1}", zgl, "pivot"))
+        return levels
+
+    @staticmethod
+    def _suggest_trade(
+        direction: str, level_type: str, spot: float, level_price: float,
+    ) -> str | None:
+        """Suggest CALL or PUT from blast model direction + level context."""
+        if direction == "bullish":
+            return "CALL"
+        elif direction == "bearish":
+            return "PUT"
+        return None
+
+    @staticmethod
+    def _format_prepare_alert(
+        instrument: str,
+        trade_action: str,
+        direction: str,
+        spot_price: float,
+        level_name: str,
+        level_price: float,
+        distance_pct: float,
+        raw_score: float,
+        firing_models: int,
+        top_model: str,
+        timestamp: datetime,
+    ) -> str:
+        """Format the prepare alert for Telegram."""
+        if trade_action == "CALL":
+            icon = "\u26a1\U0001F7E2"  # ⚡🟢
+            action_text = "PREPARE — BUY CALL"
+        else:
+            icon = "\u26a1\U0001F534"  # ⚡🔴
+            action_text = "PREPARE — BUY PUT"
+
+        # Score bar visualization
+        score_filled = int(raw_score / 10)
+        score_bar = "\u2588" * score_filled + "\u2591" * (10 - score_filled)
+
+        if spot_price > level_price:
+            pos_text = f"{abs(spot_price - level_price):,.0f} pts ABOVE"
+        else:
+            pos_text = f"{abs(level_price - spot_price):,.0f} pts BELOW"
+
+        msg = (
+            f"{icon} <b>{action_text} — {instrument}</b>\n"
+            f"\n"
+            f"<b>Models warming up:</b>\n"
+            f"  Score: [{score_bar}] {raw_score:.0f}/100 (blast fires at 70)\n"
+            f"  {firing_models} models active | Top: {top_model}\n"
+            f"\n"
+            f"<b>Price in zone:</b>\n"
+            f"  Spot  : {spot_price:,.2f}\n"
+            f"  {level_name}: {level_price:,.0f} ({pos_text})\n"
+            f"\n"
+            f"<i>Signal is building — open your broker and watch.\n"
+            f"If blast fires next, you'll be ready.</i>\n"
+            f"<i>{timestamp:%H:%M IST}</i>"
+        )
+        return msg
+
+
+def send_prepare_alert(message: str) -> bool:
+    """Send a prepare alert to Telegram."""
     return send_telegram(message)
 
 

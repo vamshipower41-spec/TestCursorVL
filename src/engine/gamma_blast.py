@@ -686,3 +686,123 @@ def _compute_levels(
             target = spot * (1.0 - tgt_pct)
 
     return round(entry, 2), round(sl, 2), round(target, 2)
+
+
+# ---------------------------------------------------------------------------
+# Blast Readiness Score — lightweight warmup check for prepare alerts
+# ---------------------------------------------------------------------------
+
+
+def compute_blast_readiness(
+    profile: GEXProfile,
+    prev_profile: GEXProfile | None,
+    chain_df: pd.DataFrame,
+    prev_chain_df: pd.DataFrame | None,
+    time_to_expiry_hours: float,
+    vix_value: float | None = None,
+) -> dict:
+    """Run the 6 models and return the raw warmup score WITHOUT applying
+    threshold, cooldown, or daily cap guards.
+
+    This is used by PrepareAlertTracker to detect when models are building
+    up (score 40-69) — an early warning before the full blast fires.
+
+    Returns:
+        dict with keys:
+            raw_score (float): Raw composite score 0-100
+            direction (str|None): "bullish" or "bearish" or None
+            firing_models (int): Number of models scoring >= 40
+            top_model (str): Name of highest-contributing model
+    """
+    # Adaptive weights
+    active_weights = dict(MODEL_WEIGHTS)
+    if vix_value is not None and vix_value > 0:
+        vix_regime = classify_vix_regime(vix_value)
+        if vix_regime["weight_overrides"]:
+            active_weights = vix_regime["weight_overrides"]
+
+    # Run all 6 models
+    components = []
+    direction_votes = {"bullish": 0.0, "bearish": 0.0}
+
+    score, direction = _score_gex_zero_cross(profile, prev_profile)
+    w = active_weights["gex_zero_cross"]
+    components.append(("gex_zero_cross", score, w))
+    if direction:
+        direction_votes[direction] += score * w
+
+    score, direction = _score_gamma_wall_breach(profile, prev_profile)
+    w = active_weights["gamma_wall_breach"]
+    components.append(("gamma_wall_breach", score, w))
+    if direction:
+        direction_votes[direction] += score * w
+
+    try:
+        charm_data = bs_charm_flow(
+            chain_df, profile.spot_price, time_to_expiry_hours,
+            profile.contract_multiplier,
+        )
+    except Exception:
+        charm_data = compute_charm_flow(
+            chain_df, profile.spot_price, time_to_expiry_hours,
+            profile.contract_multiplier,
+        )
+    score, direction = _score_charm_flow(charm_data, time_to_expiry_hours)
+    w = active_weights["charm_flow"]
+    components.append(("charm_flow", score, w))
+    if direction:
+        direction_votes[direction] += score * w
+
+    score, direction = _score_negative_gamma_squeeze(profile, prev_profile)
+    w = active_weights["negative_gamma_squeeze"]
+    components.append(("negative_gamma_squeeze", score, w))
+    if direction:
+        direction_votes[direction] += score * w
+
+    score, direction = _score_pin_break(profile, prev_profile)
+    w = active_weights["pin_break"]
+    components.append(("pin_break", score, w))
+    if direction:
+        direction_votes[direction] += score * w
+
+    try:
+        vanna_data = bs_vanna_flow(
+            chain_df, prev_chain_df, profile.spot_price, time_to_expiry_hours,
+            profile.contract_multiplier,
+        )
+    except Exception:
+        vanna_data = compute_vanna_exposure(
+            chain_df, prev_chain_df, profile.spot_price, profile.contract_multiplier,
+        )
+    score, direction = _score_vanna_squeeze(vanna_data)
+    w = active_weights["vanna_squeeze"]
+    components.append(("vanna_squeeze", score, w))
+    if direction:
+        direction_votes[direction] += score * w
+
+    # Composite
+    composite = sum(s * w for _, s, w in components)
+
+    # Confluence boost
+    firing = [name for name, s, _ in components if s >= 40]
+    if len(firing) >= 3:
+        composite = min(composite + min((len(firing) - 2) * 4.0, 8.0), 100.0)
+
+    # Direction
+    bull = direction_votes["bullish"]
+    bear = direction_votes["bearish"]
+    total = bull + bear
+    if total > 0 and abs(bull - bear) / total >= 0.15:
+        blast_dir = "bullish" if bull > bear else "bearish"
+    else:
+        blast_dir = None
+
+    # Top model
+    top = max(components, key=lambda c: c[1] * c[2])
+
+    return {
+        "raw_score": round(composite, 1),
+        "direction": blast_dir,
+        "firing_models": len(firing),
+        "top_model": top[0].replace("_", " ").title(),
+    }

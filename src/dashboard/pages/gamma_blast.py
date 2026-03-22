@@ -39,6 +39,11 @@ from config.settings import (
     TREND_ALERT_MIN_CONSECUTIVE,
     TREND_ALERT_MIN_MOVE_PCT,
     TREND_ALERT_COOLDOWN_MINUTES,
+    PREPARE_ALERT_ENABLED,
+    PREPARE_ALERT_ZONE_PCT,
+    PREPARE_ALERT_MIN_WARMUP_SCORE,
+    PREPARE_ALERT_COOLDOWN_MINUTES,
+    PREPARE_ALERT_MAX_PER_DAY,
 )
 from config.settings import UPSTOX_BASE_URL
 from src.auth.upstox_auth import load_access_token
@@ -46,7 +51,7 @@ from src.data.options_chain import OptionsChainFetcher
 from src.engine.gex_calculator import build_gex_profile
 from src.engine.greeks import validate_greeks, filter_active_strikes
 from src.engine.signal_generator import generate_signals
-from src.engine.gamma_blast import detect_gamma_blast
+from src.engine.gamma_blast import detect_gamma_blast, compute_blast_readiness
 from src.dashboard.components.blast_card import (
     render_blast_alert,
     render_blast_components,
@@ -56,6 +61,8 @@ from src.notifications.telegram import (
     send_blast_alert,
     DirectionalTracker,
     send_directional_alert,
+    PrepareAlertTracker,
+    send_prepare_alert,
     get_last_send_error,
     validate_credentials,
 )
@@ -154,6 +161,13 @@ if "directional_tracker" not in st.session_state:
     )
 if "blast_alert_sent_ids" not in st.session_state:
     st.session_state.blast_alert_sent_ids = set()
+if "prepare_tracker" not in st.session_state:
+    st.session_state.prepare_tracker = PrepareAlertTracker(
+        zone_pct=PREPARE_ALERT_ZONE_PCT,
+        min_warmup_score=PREPARE_ALERT_MIN_WARMUP_SCORE,
+        cooldown_minutes=PREPARE_ALERT_COOLDOWN_MINUTES,
+        max_alerts_per_day=PREPARE_ALERT_MAX_PER_DAY,
+    )
 
 # Validate Telegram credentials once at startup
 if "telegram_validated" not in st.session_state:
@@ -276,6 +290,29 @@ if TELEGRAM_ENABLED:
         else:
             err = get_last_send_error()
             st.warning(f"Directional alert failed: {err or 'Check Telegram credentials.'}")
+
+# Prepare alert — early warning when price enters zone AND models are warming up
+if TELEGRAM_ENABLED and PREPARE_ALERT_ENABLED:
+    readiness = compute_blast_readiness(
+        profile=profile,
+        prev_profile=st.session_state.blast_prev_profile,
+        chain_df=chain_df_filtered,
+        prev_chain_df=st.session_state.blast_prev_chain,
+        time_to_expiry_hours=tte,
+        vix_value=vix_val,
+    )
+    prepare_msg = st.session_state.prepare_tracker.update(
+        spot_price=spot_price,
+        profile=profile,
+        instrument=instrument_name,
+        readiness=readiness,
+    )
+    if prepare_msg is not None:
+        if send_prepare_alert(prepare_msg):
+            st.toast("Prepare alert sent to Telegram!")
+        else:
+            err = get_last_send_error()
+            st.warning(f"Prepare alert failed: {err or 'Check Telegram credentials.'}")
 
 # =====================================================
 # PLAIN ENGLISH SUMMARY — so you don't have to compare numbers
