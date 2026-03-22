@@ -156,6 +156,13 @@ if not _handle_oauth():
 
     st.stop()
 
+# --- Start background alert worker (runs even when you switch tabs) ---
+from src.engine.alert_worker import start_alert_worker
+
+_token = st.session_state.get("upstox_access_token", "")
+if _token:
+    start_alert_worker(_token)
+
 # Navigation — resolve page paths relative to this file
 from pathlib import Path
 
