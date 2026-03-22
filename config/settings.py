@@ -32,7 +32,8 @@ UPSTOX_BASE_URL = "https://api.upstox.com/v2"
 BLAST_MIN_SCORE = 70
 
 # Maximum blast signals per expiry day (strict cap for disciplined scalping)
-BLAST_MAX_SIGNALS_PER_DAY = 2
+BLAST_MAX_SIGNALS_PER_DAY = 4  # expiry day — more opportunities to catch moves
+BLAST_MAX_SIGNALS_NORMAL_DAY = 2  # non-expiry day — conservative
 
 # Charm acceleration zone: hours before expiry when charm flow intensifies
 CHARM_ACCELERATION_HOURS = 3.0

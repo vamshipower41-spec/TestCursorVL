@@ -38,6 +38,7 @@ from src.notifications.telegram import (
     DirectionalTracker,
     send_directional_alert,
 )
+from src.backtest.data_store import HistoricalDataStore
 
 
 def compute_time_to_expiry_hours(expiry_date: str) -> float:
@@ -71,6 +72,10 @@ def run(instrument_name: str, interval: int, expiry_date: str | None,
     fired_today = 0
     last_blast_time: datetime | None = None
 
+    # Auto-save chain snapshots for backtesting (runs in background)
+    hist_store = HistoricalDataStore()
+    print("Auto-saving chain snapshots to data/historical/ for backtesting.")
+
     # Directional trend tracker
     dir_tracker = DirectionalTracker(
         min_consecutive=TREND_ALERT_MIN_CONSECUTIVE,
@@ -88,6 +93,12 @@ def run(instrument_name: str, interval: int, expiry_date: str | None,
 
             chain_df = validate_greeks(chain_df)
             chain_df = filter_active_strikes(chain_df, spot_price, num_strikes=40)
+
+            # Auto-save snapshot for backtesting (non-blocking)
+            try:
+                hist_store.save_snapshot(instrument_name, expiry_date, now_ist(), chain_df, spot_price)
+            except Exception:
+                pass  # Don't break live monitoring if save fails
 
             profile = build_gex_profile(
                 chain_df, spot_price, inst["contract_multiplier"],

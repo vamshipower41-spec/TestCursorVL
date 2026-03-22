@@ -31,6 +31,7 @@ from src.engine.blast_filters import apply_all_filters, classify_vix_regime
 from config.settings import (
     BLAST_MIN_SCORE,
     BLAST_MAX_SIGNALS_PER_DAY,
+    BLAST_MAX_SIGNALS_NORMAL_DAY,
     CHARM_ACCELERATION_HOURS,
     NEGATIVE_GAMMA_THRESHOLD,
     PIN_BREAK_MIN_MOVE_PCT,
@@ -80,19 +81,20 @@ def detect_gamma_blast(
     Returns:
         GammaBlast if filtered composite score >= threshold, else None
     """
-    # Guard: max signals per day
-    if fired_today >= BLAST_MAX_SIGNALS_PER_DAY:
+    # Determine if this is an expiry day (TTE < 7h = within market hours of expiry)
+    is_expiry_day = time_to_expiry_hours <= 7.0
+    max_signals = BLAST_MAX_SIGNALS_PER_DAY if is_expiry_day else BLAST_MAX_SIGNALS_NORMAL_DAY
+
+    # Guard: max signals per day (adaptive: 4 expiry, 2 normal)
+    if fired_today >= max_signals:
         return None
 
-    # Guard: cooldown period
+    # Guard: cooldown period (shorter on expiry: 15 min vs 30 min)
+    cooldown = BLAST_COOLDOWN_MINUTES if not is_expiry_day else max(BLAST_COOLDOWN_MINUTES // 2, 15)
     if last_blast_time is not None:
         elapsed = (profile.timestamp - last_blast_time).total_seconds() / 60
-        if elapsed < BLAST_COOLDOWN_MINUTES:
+        if elapsed < cooldown:
             return None
-
-    # Guard: only on expiry day (TTE < 7 hours means within market hours of expiry)
-    if time_to_expiry_hours > 7.0:
-        return None
 
     # Adaptive weights: adjust based on VIX regime
     active_weights = dict(MODEL_WEIGHTS)
@@ -249,7 +251,14 @@ def detect_gamma_blast(
     )
 
     # Apply threshold against filtered score
-    if filtered_score < BLAST_MIN_SCORE:
+    # Safety net: on expiry day with zero signals late in the day, relax threshold
+    # slightly so we don't end up with zero blasts on a valid expiry day.
+    effective_threshold = BLAST_MIN_SCORE
+    if is_expiry_day and fired_today == 0 and time_to_expiry_hours < 2.0:
+        # Late in the day with no signal — lower threshold by 5 pts
+        effective_threshold = BLAST_MIN_SCORE - 5
+
+    if filtered_score < effective_threshold:
         return None
 
     # Compute entry/SL/target (dynamic by VIX regime)
