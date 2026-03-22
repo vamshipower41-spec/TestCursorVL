@@ -183,5 +183,7 @@ is more reliable because it captures the full dealer positioning.
         """)
 
 except Exception as e:
+    import traceback
     st.error(f"Error loading data: {e}")
+    st.code(traceback.format_exc())
     st.caption("Make sure your Upstox token is valid (check Settings page).")
