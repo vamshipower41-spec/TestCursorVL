@@ -371,14 +371,19 @@ def compute_max_pain(chain_df: pd.DataFrame, spot_price: float) -> float | None:
     max_pain_strike = None
 
     for strike in strikes:
-        # Call buyers lose if strike > closing price
-        call_loss = float(chain_df.loc[chain_df["strike_price"] > strike, "call_oi"].sum()) * \
-                    (chain_df.loc[chain_df["strike_price"] > strike, "strike_price"].values - strike).sum()
-        # Put buyers lose if strike < closing price
-        put_loss = float(chain_df.loc[chain_df["strike_price"] < strike, "put_oi"].sum()) * \
-                   (strike - chain_df.loc[chain_df["strike_price"] < strike, "strike_price"].values).sum()
+        # Call buyers lose if closing price < their strike (OTM calls expire worthless,
+        # ITM calls lose intrinsic). Pain = sum of (closing - strike) * OI for ITM calls.
+        call_mask = chain_df["strike_price"] < strike
+        call_pain = float(
+            ((strike - chain_df.loc[call_mask, "strike_price"]) * chain_df.loc[call_mask, "call_oi"]).sum()
+        )
+        # Put buyers lose if closing price > their strike
+        put_mask = chain_df["strike_price"] > strike
+        put_pain = float(
+            ((chain_df.loc[put_mask, "strike_price"] - strike) * chain_df.loc[put_mask, "put_oi"]).sum()
+        )
 
-        total_pain = abs(call_loss) + abs(put_loss)
+        total_pain = call_pain + put_pain
         if total_pain < min_pain:
             min_pain = total_pain
             max_pain_strike = strike

@@ -46,7 +46,17 @@ st.subheader("Quick Token Update")
 new_token = st.text_input("Paste new access token:", type="password")
 if st.button("Save Token") and new_token:
     env_path = Path(".env")
-    env_path.write_text(f"UPSTOX_ACCESS_TOKEN={new_token}\n")
+    # Preserve existing .env content, only update the token line
+    lines = env_path.read_text().splitlines() if env_path.exists() else []
+    updated = False
+    for i, line in enumerate(lines):
+        if line.startswith("UPSTOX_ACCESS_TOKEN="):
+            lines[i] = f"UPSTOX_ACCESS_TOKEN={new_token}"
+            updated = True
+            break
+    if not updated:
+        lines.append(f"UPSTOX_ACCESS_TOKEN={new_token}")
+    env_path.write_text("\n".join(lines) + "\n")
     st.success("Token saved to .env file. Refresh the page to activate.")
     st.rerun()
 
