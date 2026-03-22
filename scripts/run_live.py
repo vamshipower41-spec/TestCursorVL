@@ -82,7 +82,7 @@ def run(instrument_name: str, interval: int, expiry_date: str | None,
         try:
             chain_df, spot_price = fetcher.fetch_chain(inst["instrument_key"], expiry_date)
             if chain_df.empty:
-                print(f"[{datetime.now():%H:%M:%S}] No chain data received. Retrying...")
+                print(f"[{now_ist():%H:%M:%S}] No chain data received. Retrying...")
                 time.sleep(interval)
                 continue
 
@@ -169,7 +169,7 @@ def run(instrument_name: str, interval: int, expiry_date: str | None,
             print("\nStopped.")
             break
         except Exception as e:
-            print(f"[{datetime.now():%H:%M:%S}] Error: {e}")
+            print(f"[{now_ist():%H:%M:%S}] Error: {e}")
 
         time.sleep(interval)
 

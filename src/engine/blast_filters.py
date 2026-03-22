@@ -17,7 +17,7 @@ Filters:
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 import numpy as np
 import pandas as pd
@@ -244,7 +244,11 @@ def apply_volume_filter(blast_score: float, volume_data: dict) -> float:
 # 4. Smart Timing
 # ---------------------------------------------------------------------------
 
-def apply_timing_filter(blast_score: float, time_to_expiry_hours: float) -> float:
+def apply_timing_filter(
+    blast_score: float,
+    time_to_expiry_hours: float,
+    timestamp: datetime | None = None,
+) -> float:
     """Adjust score based on time of day on expiry day.
 
     Research shows:
@@ -255,7 +259,7 @@ def apply_timing_filter(blast_score: float, time_to_expiry_hours: float) -> floa
 
     Returns adjusted score.
     """
-    minutes = market_minutes_elapsed()
+    minutes = market_minutes_elapsed(timestamp)
 
     if minutes < 0:
         # Before market open
@@ -459,8 +463,8 @@ def apply_all_filters(
     details["volume"] = vol_data
     details["after_volume"] = score
 
-    # 4. Smart timing
-    score = apply_timing_filter(score, time_to_expiry_hours)
+    # 4. Smart timing (use profile timestamp for backtest accuracy)
+    score = apply_timing_filter(score, time_to_expiry_hours, profile.timestamp)
     details["after_timing"] = score
 
     # 5. Monthly vs weekly

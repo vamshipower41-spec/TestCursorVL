@@ -282,10 +282,16 @@ st.session_state.blast_prev_profile = profile
 st.session_state.blast_prev_chain = chain_df_filtered.copy()
 
 if blast is not None:
-    # BLAST DETECTED
-    st.session_state.blast_fired_today += 1
-    st.session_state.blast_last_time = blast.timestamp
-    st.session_state.blast_history.append(blast)
+    # BLAST DETECTED — deduplicate against Streamlit re-renders
+    blast_id = f"{blast.instrument}_{blast.timestamp.isoformat()}"
+    existing_ids = {
+        f"{b.instrument}_{b.timestamp.isoformat()}"
+        for b in st.session_state.blast_history
+    }
+    if blast_id not in existing_ids:
+        st.session_state.blast_fired_today += 1
+        st.session_state.blast_last_time = blast.timestamp
+        st.session_state.blast_history.append(blast)
 
     # Send Telegram alert (only once per blast, keyed by timestamp)
     blast_id = f"{blast.instrument}_{blast.timestamp.isoformat()}"

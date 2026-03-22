@@ -25,7 +25,6 @@ from src.data.models import GEXProfile, GammaBlast, BlastComponent
 from src.engine.charm_vanna import (
     compute_charm_flow,
     compute_vanna_exposure,
-    compute_oi_change,
 )
 from src.engine.blast_filters import apply_all_filters, classify_vix_regime
 from config.settings import (
@@ -274,11 +273,10 @@ def _score_gex_zero_cross(
 
     if prev_above == curr_above:
         # No crossing, but score proximity to flip
-        if current.gamma_flip_level:
-            dist = abs(current.spot_price - current.gamma_flip_level) / current.spot_price
-            if dist < 0.002:  # within 0.2% — imminent crossing
-                direction = "bullish" if current.spot_price < current.gamma_flip_level else "bearish"
-                return 40.0, direction
+        dist = abs(current.spot_price - current.gamma_flip_level) / current.spot_price
+        if dist < 0.002:  # within 0.2% — imminent crossing
+            direction = "bullish" if current.spot_price < current.gamma_flip_level else "bearish"
+            return 40.0, direction
         return 0.0, None
 
     # Crossing detected — high score

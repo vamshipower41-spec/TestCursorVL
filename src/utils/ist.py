@@ -50,9 +50,11 @@ def is_market_open() -> bool:
     return market_open <= now <= market_close
 
 
-def market_minutes_elapsed() -> float:
+def market_minutes_elapsed(timestamp: datetime | None = None) -> float:
     """Minutes elapsed since market open (9:15 AM IST). Negative if before open."""
-    now = now_ist()
+    now = timestamp if timestamp is not None else now_ist()
+    if now.tzinfo is None:
+        now = make_ist(now)
     market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
     return (now - market_open).total_seconds() / 60.0
 
