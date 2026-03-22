@@ -156,10 +156,11 @@ from pathlib import Path
 _pages_dir = Path(__file__).parent / "pages"
 
 pages = {
-    "Scalping": [
-        st.Page(str(_pages_dir / "gamma_blast.py"), title="Gamma Blast Scalper", icon="💥", default=True),
+    "Trading": [
+        st.Page(str(_pages_dir / "market_radar.py"), title="Market Radar", icon="🎯", default=True),
     ],
-    "Live GEX": [
+    "Advanced": [
+        st.Page(str(_pages_dir / "gamma_blast.py"), title="Gamma Blast (Pro)", icon="💥"),
         st.Page(str(_pages_dir / "live_gex.py"), title="Live GEX Monitor", icon="📈"),
     ],
     "Analysis": [
