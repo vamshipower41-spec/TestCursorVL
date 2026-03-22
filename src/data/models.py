@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class OptionStrikeData(BaseModel):
@@ -60,7 +60,7 @@ class GEXSignal(BaseModel):
     level: float  # Price level associated with signal
     strength: float  # 0.0 to 1.0 normalized confidence
     direction: str | None = None  # bullish, bearish, or None
-    metadata: dict = {}
+    metadata: dict = Field(default_factory=dict)
 
 
 class BlastComponent(BaseModel):
@@ -88,7 +88,7 @@ class GammaBlast(BaseModel):
     target: float  # suggested target
     time_to_expiry_hours: float
     components: list[BlastComponent]  # breakdown by model
-    metadata: dict = {}
+    metadata: dict = Field(default_factory=dict)
 
 
 # Rebuild GEXProfile now that StrikeGEX is defined
