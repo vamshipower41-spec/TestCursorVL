@@ -5,14 +5,16 @@ allowing a gamma blast to fire. Each filter can suppress or boost the
 composite score based on real market conditions.
 
 Filters:
-1. Trend Filter — EMA-based, prevents counter-trend blasts in strong trends
-2. VIX Regime — adapts thresholds and weights based on volatility regime
-3. Volume Confirmation — requires volume spike at key strikes
-4. Smart Timing — post-1:30 PM IST blasts are more reliable (charm zone)
-5. Monthly vs Weekly — monthly = pin bias, weekly = breakout bias
-6. Sensex Liquidity — minimum OI threshold for Sensex (lower liquidity index)
-7. Max Pain Proximity — suppress breakout signals when pinned near max pain
-8. Adaptive Weights — shift model weights based on VIX and time-of-day
+1.  Trend Filter — EMA-based, prevents counter-trend blasts in strong trends
+2.  VIX Regime — adapts thresholds and weights based on volatility regime
+3.  Volume Confirmation — requires volume spike at key strikes
+4.  Smart Timing — post-1:30 PM IST blasts are more reliable (charm zone)
+5.  Monthly vs Weekly — monthly = pin bias, weekly = breakout bias
+6.  Sensex Liquidity — minimum OI threshold for Sensex (lower liquidity index)
+7.  Max Pain Proximity — suppress breakout signals when pinned near max pain
+8.  PCR Directional — put-call ratio confirms or contradicts blast direction
+9.  IV Skew — ATM put-call IV skew for directional fear detection
+10. Volume-Direction Alignment — ATM volume dominant side must match direction
 """
 
 from __future__ import annotations
@@ -370,6 +372,9 @@ def compute_max_pain(chain_df: pd.DataFrame, spot_price: float) -> float | None:
     if chain_df.empty:
         return None
 
+    if "call_oi" not in chain_df.columns or "put_oi" not in chain_df.columns:
+        return None
+
     strikes = chain_df["strike_price"].values
     min_pain = float("inf")
     max_pain_strike = None
@@ -438,6 +443,9 @@ def compute_pcr(chain_df: pd.DataFrame) -> dict:
         - pcr: float ratio
         - pcr_signal: "bullish", "bearish", or "neutral"
     """
+    if "put_oi" not in chain_df.columns or "call_oi" not in chain_df.columns:
+        return {"pcr": 0.0, "pcr_signal": "neutral"}
+
     total_put_oi = int(chain_df["put_oi"].sum())
     total_call_oi = int(chain_df["call_oi"].sum())
 

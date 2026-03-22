@@ -459,6 +459,8 @@ if blast is not None:
         if send_blast_alert(blast):
             st.session_state.radar_alert_sent_ids.add(blast_id)
             st.toast("Telegram alert sent!")
+        else:
+            st.toast("Telegram alert failed — check bot token/chat ID in Settings.", icon="⚠️")
 
     is_bull = blast.direction == "bullish"
     color = "#26a69a" if is_bull else "#ef5350"
@@ -556,7 +558,8 @@ else:
             </div>
         </div>
         """, unsafe_allow_html=True)
-    elif st.session_state.radar_fired_today >= BLAST_MAX_SIGNALS_PER_DAY:
+    elif st.session_state.radar_fired_today >= (BLAST_MAX_SIGNALS_PER_DAY if is_expiry else BLAST_MAX_SIGNALS_NORMAL_DAY):
+        max_signals = BLAST_MAX_SIGNALS_PER_DAY if is_expiry else BLAST_MAX_SIGNALS_NORMAL_DAY
         st.markdown(f"""
         <div style="background:#1a2e1a; border:1px solid #26a69a; border-radius:12px;
                     padding:24px; text-align:center; margin:8px 0;">
@@ -564,7 +567,7 @@ else:
                 Done for Today!
             </div>
             <div style="font-size:0.95rem; color:#888; margin-top:8px;">
-                {st.session_state.radar_fired_today} signals fired today (max {BLAST_MAX_SIGNALS_PER_DAY}).
+                {st.session_state.radar_fired_today} signals fired today (max {max_signals}).
                 <br>No more signals will be generated.
             </div>
         </div>
@@ -585,7 +588,7 @@ else:
             </div>
             <div style="font-size:0.9rem; color:#888; margin-top:4px;">
                 {urgency} &nbsp;&bull;&nbsp;
-                Signals today: {st.session_state.radar_fired_today}/{BLAST_MAX_SIGNALS_PER_DAY}
+                Signals today: {st.session_state.radar_fired_today}/{BLAST_MAX_SIGNALS_PER_DAY if is_expiry else BLAST_MAX_SIGNALS_NORMAL_DAY}
             </div>
             <div style="font-size:0.85rem; color:#555; margin-top:8px;">
                 A signal fires when multiple models confirm a strong move is likely.<br>

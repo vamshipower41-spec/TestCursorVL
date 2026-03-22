@@ -64,7 +64,7 @@ def detect_gamma_blast(
     vix_value: float | None = None,
     expiry_date: str = "",
 ) -> GammaBlast | None:
-    """Run all 6 models, apply 7 quality filters, produce blast if score is high enough.
+    """Run all 6 models, apply 10 quality filters, produce blast if score is high enough.
 
     Args:
         profile: Current GEX profile
@@ -236,8 +236,8 @@ def detect_gamma_blast(
 
     blast_direction = "bullish" if bull_total > bear_total else "bearish"
 
-    # Apply 7 quality filters (trend, VIX, volume, timing, expiry type,
-    # liquidity, max pain) — this is what separates 5/10 from 9/10
+    # Apply 10 quality filters (trend, VIX, volume, timing, expiry type,
+    # liquidity, max pain, PCR, IV skew, volume-direction) — separates 5/10 from 9/10
     filtered_score, filter_details = apply_all_filters(
         raw_score=composite,
         blast_direction=blast_direction,

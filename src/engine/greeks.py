@@ -31,6 +31,21 @@ def validate_greeks(chain_df: pd.DataFrame) -> pd.DataFrame:
         df[col] = df[col].fillna(0.0)
         df[col] = df[col].clip(lower=0.0)
 
+    # Volume columns: NaN → 0, ensure integer-safe
+    for col in ["call_volume", "put_volume"]:
+        if col in df.columns:
+            df[col] = df[col].fillna(0).astype(int)
+
+    # OI columns: NaN → 0, ensure integer-safe
+    for col in ["call_oi", "put_oi"]:
+        if col in df.columns:
+            df[col] = df[col].fillna(0).astype(int)
+
+    # LTP columns: NaN → 0.0
+    for col in ["call_ltp", "put_ltp"]:
+        if col in df.columns:
+            df[col] = df[col].fillna(0.0)
+
     return df
 
 
