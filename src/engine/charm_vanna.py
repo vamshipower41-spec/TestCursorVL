@@ -50,6 +50,11 @@ def compute_charm_flow(
     # Charm ~ 1/sqrt(T) for ATM, even faster for near-ATM
     time_factor = 1.0 / max(np.sqrt(time_to_expiry_hours / 24.0), 0.01)
 
+    # Ensure required columns have no NaN before computation
+    for col in ["call_delta", "put_delta", "call_oi", "put_oi"]:
+        if col in df.columns:
+            df[col] = df[col].fillna(0)
+
     # Call charm: OTM calls (moneyness > 0) lose delta → dealers sell
     call_mask = df["moneyness"] > 0
     df.loc[call_mask, "call_charm"] = (
@@ -130,17 +135,21 @@ def compute_vanna_exposure(
     merged["call_iv_change"] = merged["call_iv"] - merged["call_iv_prev"]
     merged["put_iv_change"] = merged["put_iv"] - merged["put_iv_prev"]
 
+    # Drop rows with NaN IV changes (from missing/zero IVs in either snapshot)
+    merged["call_iv_change"] = merged["call_iv_change"].fillna(0.0)
+    merged["put_iv_change"] = merged["put_iv_change"].fillna(0.0)
+
     # Vanna effect: IV drop on calls → bullish (dealers buy)
     # Approximate vanna as delta * OI * iv_change
     merged["call_vanna_flow"] = (
         -merged["call_iv_change"]  # negative IV change = positive flow
-        * merged["call_oi"]
-        * merged["call_delta"].abs()
+        * merged["call_oi"].fillna(0)
+        * merged["call_delta"].abs().fillna(0)
     )
     merged["put_vanna_flow"] = (
         merged["put_iv_change"]  # positive IV change on puts = dealers sell
-        * merged["put_oi"]
-        * merged["put_delta"].abs()
+        * merged["put_oi"].fillna(0)
+        * merged["put_delta"].abs().fillna(0)
     )
 
     call_vanna = float(merged["call_vanna_flow"].sum()) * contract_multiplier
@@ -150,6 +159,9 @@ def compute_vanna_exposure(
     avg_iv_change = float(
         (merged["call_iv_change"].mean() + merged["put_iv_change"].mean()) / 2
     )
+    # Guard against NaN from empty mean
+    if pd.isna(avg_iv_change):
+        avg_iv_change = 0.0
 
     max_flow = max(abs(call_vanna), abs(put_vanna), 1.0)
     vanna_intensity = min(abs(net_vanna) / max_flow * 100, 100.0)
@@ -192,8 +204,8 @@ def compute_oi_change(
     if merged.empty:
         return {"net_oi_change": 0, "oi_surge_strikes": [], "oi_intensity": 0}
 
-    merged["call_oi_change"] = merged["call_oi"] - merged["call_oi_prev"]
-    merged["put_oi_change"] = merged["put_oi"] - merged["put_oi_prev"]
+    merged["call_oi_change"] = (merged["call_oi"].fillna(0) - merged["call_oi_prev"].fillna(0))
+    merged["put_oi_change"] = (merged["put_oi"].fillna(0) - merged["put_oi_prev"].fillna(0))
     merged["total_oi_change"] = merged["call_oi_change"] + merged["put_oi_change"]
 
     # Focus on near-ATM strikes (within 2% of spot)

@@ -101,3 +101,22 @@ class OptionsChainFetcher:
         if not expiries:
             raise ValueError(f"No expiry dates found for {instrument_key}")
         return expiries[0]
+
+    def fetch_multi_expiry_chains(
+        self, instrument_key: str, count: int = 2,
+    ) -> list[tuple[str, pd.DataFrame, float]]:
+        """Fetch chains for the nearest N expiries.
+
+        Returns list of (expiry_date, chain_df, spot_price) tuples.
+        Only includes expiries with non-empty chain data.
+        """
+        expiries = self.get_expiry_dates(instrument_key)
+        results = []
+        for exp in expiries[:count]:
+            try:
+                chain_df, spot = self.fetch_chain(instrument_key, exp)
+                if not chain_df.empty:
+                    results.append((exp, chain_df, spot))
+            except Exception:
+                continue
+        return results

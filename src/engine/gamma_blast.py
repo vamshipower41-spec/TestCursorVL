@@ -27,10 +27,21 @@ from src.engine.charm_vanna import (
     compute_vanna_exposure,
     compute_oi_change,
 )
+from src.engine.bs_greeks import (
+    compute_dealer_charm_flow as bs_charm_flow,
+    compute_dealer_vanna_flow as bs_vanna_flow,
+)
+from src.engine.oi_flow import classify_oi_flow, compute_adjusted_gex
+from src.engine.pattern_matcher import (
+    compute_pattern_features,
+    match_historical_patterns,
+    apply_pattern_adjustment,
+)
 from src.engine.blast_filters import apply_all_filters, classify_vix_regime
 from config.settings import (
     BLAST_MIN_SCORE,
     BLAST_MAX_SIGNALS_PER_DAY,
+    BLAST_MAX_SIGNALS_NORMAL_DAY,
     CHARM_ACCELERATION_HOURS,
     NEGATIVE_GAMMA_THRESHOLD,
     PIN_BREAK_MIN_MOVE_PCT,
@@ -63,7 +74,7 @@ def detect_gamma_blast(
     vix_value: float | None = None,
     expiry_date: str = "",
 ) -> GammaBlast | None:
-    """Run all 6 models, apply 7 quality filters, produce blast if score is high enough.
+    """Run all 6 models, apply 10 quality filters, produce blast if score is high enough.
 
     Args:
         profile: Current GEX profile
@@ -80,19 +91,20 @@ def detect_gamma_blast(
     Returns:
         GammaBlast if filtered composite score >= threshold, else None
     """
-    # Guard: max signals per day
-    if fired_today >= BLAST_MAX_SIGNALS_PER_DAY:
+    # Determine if this is an expiry day (TTE < 7h = within market hours of expiry)
+    is_expiry_day = time_to_expiry_hours <= 7.0
+    max_signals = BLAST_MAX_SIGNALS_PER_DAY if is_expiry_day else BLAST_MAX_SIGNALS_NORMAL_DAY
+
+    # Guard: max signals per day (adaptive: 4 expiry, 2 normal)
+    if fired_today >= max_signals:
         return None
 
-    # Guard: cooldown period
+    # Guard: cooldown period (shorter on expiry: 15 min vs 30 min)
+    cooldown = BLAST_COOLDOWN_MINUTES if not is_expiry_day else max(BLAST_COOLDOWN_MINUTES // 2, 15)
     if last_blast_time is not None:
         elapsed = (profile.timestamp - last_blast_time).total_seconds() / 60
-        if elapsed < BLAST_COOLDOWN_MINUTES:
+        if elapsed < cooldown:
             return None
-
-    # Guard: only on expiry day (TTE < 7 hours means within market hours of expiry)
-    if time_to_expiry_hours > 7.0:
-        return None
 
     # Adaptive weights: adjust based on VIX regime
     active_weights = dict(MODEL_WEIGHTS)
@@ -130,11 +142,17 @@ def detect_gamma_blast(
     if direction:
         direction_votes[direction] += score * w
 
-    # 3. Charm Flow Accelerator
-    charm_data = compute_charm_flow(
-        chain_df, profile.spot_price, time_to_expiry_hours,
-        profile.contract_multiplier,
-    )
+    # 3. Charm Flow Accelerator (BS-derived when IV available, fallback to approx)
+    try:
+        charm_data = bs_charm_flow(
+            chain_df, profile.spot_price, time_to_expiry_hours,
+            profile.contract_multiplier,
+        )
+    except Exception:
+        charm_data = compute_charm_flow(
+            chain_df, profile.spot_price, time_to_expiry_hours,
+            profile.contract_multiplier,
+        )
     score, direction = _score_charm_flow(charm_data, time_to_expiry_hours)
     w = active_weights["charm_flow"]
     components.append(BlastComponent(
@@ -173,10 +191,16 @@ def detect_gamma_blast(
     if direction:
         direction_votes[direction] += score * w
 
-    # 6. Vanna Squeeze
-    vanna_data = compute_vanna_exposure(
-        chain_df, prev_chain_df, profile.spot_price, profile.contract_multiplier,
-    )
+    # 6. Vanna Squeeze (BS-derived when IV available, fallback to approx)
+    try:
+        vanna_data = bs_vanna_flow(
+            chain_df, prev_chain_df, profile.spot_price, time_to_expiry_hours,
+            profile.contract_multiplier,
+        )
+    except Exception:
+        vanna_data = compute_vanna_exposure(
+            chain_df, prev_chain_df, profile.spot_price, profile.contract_multiplier,
+        )
     score, direction = _score_vanna_squeeze(vanna_data)
     w = active_weights["vanna_squeeze"]
     components.append(BlastComponent(
@@ -189,19 +213,92 @@ def detect_gamma_blast(
     if direction:
         direction_votes[direction] += score * w
 
+    # Compute OI change for confirmation (enrichment, not a scored model)
+    oi_data = compute_oi_change(chain_df, prev_chain_df, profile.spot_price)
+
+    # --- OI Flow Direction (bought/sold estimation) ---
+    oi_flow_data = None
+    if prev_chain_df is not None:
+        try:
+            oi_flow_data = classify_oi_flow(chain_df, prev_chain_df, profile.spot_price)
+        except Exception:
+            pass  # Non-critical — fall back to naive GEX
+
     # Compute raw composite score
     composite = sum(c.score * c.weight for c in components)
 
-    # Determine direction
+    # OI buildup near ATM boosts confidence; unwinding penalizes
+    if oi_data["oi_intensity"] > 30 and oi_data["net_oi_change"] > 0:
+        composite = min(composite + oi_data["oi_intensity"] * 0.05, 100.0)
+    elif oi_data["oi_intensity"] > 30 and oi_data["net_oi_change"] < 0:
+        composite = max(composite - oi_data["oi_intensity"] * 0.05, 0.0)
+
+    # --- OI Flow Direction Boost/Penalty ---
+    # If flow estimation has high confidence, use it to confirm/deny direction
+    if oi_flow_data and oi_flow_data["flow_confidence"] > 0.5:
+        dominant_flow = oi_flow_data["dominant_flow"]
+        # Will be compared against blast_direction after direction is determined
+
+    # --- Model Confluence Boost (AI Architect) ---
+    # Gamma dynamics are NON-LINEAR: when multiple models fire together,
+    # the real effect is multiplicative, not additive.
+    # e.g., negative gamma squeeze + wall breach = explosive cascade.
+    firing_models = [c for c in components if c.score >= 40]
+    if len(firing_models) >= 3:
+        # 3+ models agree → strong confluence, boost up to +8 pts
+        confluence_boost = min((len(firing_models) - 2) * 4.0, 8.0)
+        composite = min(composite + confluence_boost, 100.0)
+    # Special interaction: negative gamma + wall breach is multiplicative
+    neg_gamma_score = next((c.score for c in components if c.model_name == "negative_gamma_squeeze"), 0)
+    wall_breach_score = next((c.score for c in components if c.model_name == "gamma_wall_breach"), 0)
+    if neg_gamma_score >= 50 and wall_breach_score >= 50:
+        # Both firing strongly → dealer hedging amplifies through the wall
+        interaction_boost = min((neg_gamma_score + wall_breach_score) * 0.05, 7.0)
+        composite = min(composite + interaction_boost, 100.0)
+
+    # --- Direction Conviction Margin (ML Engineer) ---
+    # Require meaningful gap between bull/bear votes to avoid ambiguous signals
     if direction_votes["bullish"] == 0 and direction_votes["bearish"] == 0:
         return None
-    blast_direction = (
-        "bullish" if direction_votes["bullish"] >= direction_votes["bearish"]
-        else "bearish"
-    )
 
-    # Apply 7 quality filters (trend, VIX, volume, timing, expiry type,
-    # liquidity, max pain) — this is what separates 5/10 from 9/10
+    bull_total = direction_votes["bullish"]
+    bear_total = direction_votes["bearish"]
+    vote_total = bull_total + bear_total
+    vote_margin = abs(bull_total - bear_total) / max(vote_total, 1.0)
+
+    if vote_margin < 0.15:
+        # Less than 15% margin — direction is ambiguous, suppress
+        return None
+
+    blast_direction = "bullish" if bull_total > bear_total else "bearish"
+
+    # --- OI Flow Direction Confirmation ---
+    if oi_flow_data and oi_flow_data["flow_confidence"] > 0.5:
+        if oi_flow_data["dominant_flow"] == blast_direction:
+            # OI flow confirms blast direction — boost
+            composite = min(composite + 5.0 * oi_flow_data["flow_confidence"], 100.0)
+        elif oi_flow_data["dominant_flow"] != "neutral":
+            # OI flow contradicts — penalize
+            composite = max(composite - 8.0 * oi_flow_data["flow_confidence"], 0.0)
+
+    # --- Historical Pattern Matching ---
+    trend_data_for_pattern = {"trend": "neutral"}
+    if price_history and len(price_history) >= 3:
+        from src.engine.blast_filters import compute_trend_bias
+        trend_data_for_pattern = compute_trend_bias(price_history)
+
+    try:
+        pattern_features = compute_pattern_features(
+            profile, vix_value, time_to_expiry_hours,
+            trend_data_for_pattern.get("trend", "neutral"), blast_direction,
+        )
+        pattern_result = match_historical_patterns(pattern_features)
+        composite = apply_pattern_adjustment(composite, pattern_result)
+    except Exception:
+        pattern_result = None  # Non-critical — skip if no history yet
+
+    # Apply 10 quality filters (trend, VIX, volume, timing, expiry type,
+    # liquidity, max pain, PCR, IV skew, volume-direction) — separates 5/10 from 9/10
     filtered_score, filter_details = apply_all_filters(
         raw_score=composite,
         blast_direction=blast_direction,
@@ -215,11 +312,28 @@ def detect_gamma_blast(
     )
 
     # Apply threshold against filtered score
-    if filtered_score < BLAST_MIN_SCORE:
+    # Safety net: on expiry day with zero signals late in the day, relax threshold
+    # slightly so we don't end up with zero blasts on a valid expiry day.
+    effective_threshold = BLAST_MIN_SCORE
+    if is_expiry_day and fired_today == 0 and time_to_expiry_hours < 2.0:
+        # Late in the day with no signal — lower threshold by 5 pts
+        effective_threshold = BLAST_MIN_SCORE - 5
+
+    if filtered_score < effective_threshold:
         return None
 
-    # Compute entry/SL/target
-    entry, sl, target = _compute_levels(profile, blast_direction)
+    # Compute entry/SL/target (dynamic by VIX regime)
+    entry, sl, target = _compute_levels(profile, blast_direction, vix_value)
+
+    # --- R:R Quality Gate (AI Strategist) ---
+    # Suppress signals with poor risk-reward ratio
+    risk = abs(entry - sl)
+    reward = abs(target - entry)
+    if risk > 0:
+        rr_ratio = reward / risk
+        if rr_ratio < 1.0:
+            # R:R below 1:1 — not worth the trade, suppress
+            return None
 
     return GammaBlast(
         timestamp=profile.timestamp,
@@ -246,6 +360,28 @@ def detect_gamma_blast(
                 "net_vanna_flow": vanna_data["net_vanna_flow"],
                 "vanna_intensity": vanna_data["vanna_intensity"],
             },
+            "oi_data": {
+                "net_oi_change": oi_data["net_oi_change"],
+                "oi_intensity": oi_data["oi_intensity"],
+                "surge_strikes": oi_data["oi_surge_strikes"][:3],
+            },
+            "confluence": {
+                "firing_models": len(firing_models),
+                "neg_gamma_wall_interaction": neg_gamma_score >= 50 and wall_breach_score >= 50,
+            },
+            "direction_margin": round(vote_margin, 3),
+            "oi_flow": {
+                "dominant_flow": oi_flow_data["dominant_flow"] if oi_flow_data else "unavailable",
+                "flow_confidence": oi_flow_data["flow_confidence"] if oi_flow_data else 0,
+                "net_dealer_delta": oi_flow_data["net_dealer_delta"] if oi_flow_data else 0,
+            },
+            "pattern_match": {
+                "hit_rate": pattern_result.conditional_hit_rate if pattern_result else 0,
+                "matches": pattern_result.total_matches if pattern_result else 0,
+                "recommendation": pattern_result.recommendation if pattern_result else "no_data",
+                "confidence": pattern_result.confidence if pattern_result else 0,
+            },
+            "expiry_date": expiry_date,
         },
     )
 
@@ -274,11 +410,10 @@ def _score_gex_zero_cross(
 
     if prev_above == curr_above:
         # No crossing, but score proximity to flip
-        if current.gamma_flip_level:
-            dist = abs(current.spot_price - current.gamma_flip_level) / current.spot_price
-            if dist < 0.002:  # within 0.2% — imminent crossing
-                direction = "bullish" if current.spot_price < current.gamma_flip_level else "bearish"
-                return 40.0, direction
+        dist = abs(current.spot_price - current.gamma_flip_level) / current.spot_price
+        if dist < 0.002:  # within 0.2% — imminent crossing
+            direction = "bullish" if current.spot_price < current.gamma_flip_level else "bearish"
+            return 40.0, direction
         return 0.0, None
 
     # Crossing detected — high score
@@ -497,42 +632,57 @@ def _score_vanna_squeeze(vanna_data: dict) -> tuple[float, str | None]:
 
 
 def _compute_levels(
-    profile: GEXProfile, direction: str,
+    profile: GEXProfile, direction: str, vix_value: float | None = None,
 ) -> tuple[float, float, float]:
     """Compute entry, stop-loss, and target levels for a gamma blast trade.
 
-    Uses gamma walls and profile levels for intelligent placement:
-    - Entry: current spot
-    - SL: nearest opposing gamma wall (natural support/resistance)
-    - Target: next gamma wall in blast direction
+    Uses gamma walls and profile levels for intelligent placement.
+    SL/Target percentages scale dynamically with VIX:
+    - Low VIX (<14):  tighter SL (0.3%), tighter target (0.6%) — small moves
+    - Normal VIX:     standard SL (0.5%), standard target (0.8%)
+    - High VIX (>18): wider SL (0.7%), wider target (1.2%) — bigger swings
+    - Extreme (>22):  widest SL (0.9%), widest target (1.5%)
     """
     spot = profile.spot_price
     entry = spot
 
+    # Dynamic SL/Target percentages based on VIX regime
+    if vix_value is not None and vix_value > 0:
+        if vix_value < 14:
+            sl_pct, tgt_pct = 0.003, 0.006
+        elif vix_value < 18:
+            sl_pct, tgt_pct = 0.005, 0.008
+        elif vix_value < 22:
+            sl_pct, tgt_pct = 0.007, 0.012
+        else:
+            sl_pct, tgt_pct = 0.009, 0.015
+    else:
+        sl_pct, tgt_pct = 0.005, 0.008  # default (normal vol)
+
     if direction == "bullish":
-        # Stop loss: below put wall or 0.5% below entry
+        # Stop loss: put wall or dynamic % below entry
         if profile.put_wall and profile.put_wall < spot:
             sl = profile.put_wall
         else:
-            sl = spot * 0.995
+            sl = spot * (1.0 - sl_pct)
 
-        # Target: call wall or 0.8% above entry
+        # Target: call wall or dynamic % above entry
         if profile.call_wall and profile.call_wall > spot:
             target = profile.call_wall
         else:
-            target = spot * 1.008
+            target = spot * (1.0 + tgt_pct)
 
     else:  # bearish
-        # Stop loss: above call wall or 0.5% above entry
+        # Stop loss: call wall or dynamic % above entry
         if profile.call_wall and profile.call_wall > spot:
             sl = profile.call_wall
         else:
-            sl = spot * 1.005
+            sl = spot * (1.0 + sl_pct)
 
-        # Target: put wall or 0.8% below entry
+        # Target: put wall or dynamic % below entry
         if profile.put_wall and profile.put_wall < spot:
             target = profile.put_wall
         else:
-            target = spot * 0.992
+            target = spot * (1.0 - tgt_pct)
 
     return round(entry, 2), round(sl, 2), round(target, 2)

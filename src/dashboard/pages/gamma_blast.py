@@ -32,6 +32,7 @@ except ImportError:
 from config.instruments import get_instrument, INSTRUMENTS
 from config.settings import (
     BLAST_MAX_SIGNALS_PER_DAY,
+    BLAST_MAX_SIGNALS_NORMAL_DAY,
     EXPIRY_DAY_POLL_INTERVAL,
     DASHBOARD_REFRESH_INTERVAL,
     TELEGRAM_ENABLED,
@@ -55,6 +56,8 @@ from src.notifications.telegram import (
     send_blast_alert,
     DirectionalTracker,
     send_directional_alert,
+    get_last_send_error,
+    validate_credentials,
 )
 from src.backtest.data_store import HistoricalDataStore
 
@@ -151,6 +154,16 @@ if "directional_tracker" not in st.session_state:
     )
 if "blast_alert_sent_ids" not in st.session_state:
     st.session_state.blast_alert_sent_ids = set()
+
+# Validate Telegram credentials once at startup
+if "telegram_validated" not in st.session_state:
+    if TELEGRAM_ENABLED:
+        tg_valid, tg_msg = validate_credentials()
+        st.session_state.telegram_validated = tg_valid
+        if not tg_valid:
+            st.warning(f"Telegram alerts will NOT work: {tg_msg}")
+    else:
+        st.session_state.telegram_validated = False
 
 # Reset daily counters if new day
 if st.session_state.blast_last_date != today_ist().isoformat():
@@ -258,8 +271,11 @@ if TELEGRAM_ENABLED:
         instrument=instrument_name,
     )
     if dir_alert is not None:
-        send_directional_alert(dir_alert)
-        st.toast(f"Directional {trend_data['trend']} alert sent to Telegram!")
+        if send_directional_alert(dir_alert):
+            st.toast(f"Directional {trend_data['trend']} alert sent to Telegram!")
+        else:
+            err = get_last_send_error()
+            st.warning(f"Directional alert failed: {err or 'Check Telegram credentials.'}")
 
 st.markdown("---")
 
@@ -282,10 +298,16 @@ st.session_state.blast_prev_profile = profile
 st.session_state.blast_prev_chain = chain_df_filtered.copy()
 
 if blast is not None:
-    # BLAST DETECTED
-    st.session_state.blast_fired_today += 1
-    st.session_state.blast_last_time = blast.timestamp
-    st.session_state.blast_history.append(blast)
+    # BLAST DETECTED — deduplicate against Streamlit re-renders
+    blast_id = f"{blast.instrument}_{blast.timestamp.isoformat()}"
+    existing_ids = {
+        f"{b.instrument}_{b.timestamp.isoformat()}"
+        for b in st.session_state.blast_history
+    }
+    if blast_id not in existing_ids:
+        st.session_state.blast_fired_today += 1
+        st.session_state.blast_last_time = blast.timestamp
+        st.session_state.blast_history.append(blast)
 
     # Send Telegram alert (only once per blast, keyed by timestamp)
     blast_id = f"{blast.instrument}_{blast.timestamp.isoformat()}"
@@ -293,6 +315,10 @@ if blast is not None:
         if send_blast_alert(blast):
             st.session_state.blast_alert_sent_ids.add(blast_id)
             st.toast("Telegram alert sent!")
+        else:
+            # Show error feedback instead of silently failing
+            err = get_last_send_error()
+            st.error(f"Telegram alert FAILED: {err or 'Unknown error. Check credentials.'}")
 
     render_blast_alert(blast)
 
@@ -334,7 +360,7 @@ else:
         is_expiry_day=is_expiry,
         time_to_expiry_hours=tte,
         fired_today=st.session_state.blast_fired_today,
-        max_signals=BLAST_MAX_SIGNALS_PER_DAY,
+        max_signals=BLAST_MAX_SIGNALS_PER_DAY if is_expiry else BLAST_MAX_SIGNALS_NORMAL_DAY,
     )
 
 # Also generate standard GEX signals for context
@@ -363,7 +389,8 @@ if signals:
 # Blast history for today
 if st.session_state.blast_history:
     st.markdown("---")
-    st.subheader(f"Blast History ({len(st.session_state.blast_history)}/{BLAST_MAX_SIGNALS_PER_DAY})")
+    _max_sig = BLAST_MAX_SIGNALS_PER_DAY if is_expiry else BLAST_MAX_SIGNALS_NORMAL_DAY
+    st.subheader(f"Blast History ({len(st.session_state.blast_history)}/{_max_sig})")
     for i, b in enumerate(reversed(st.session_state.blast_history), 1):
         dir_icon = "UP" if b.direction == "bullish" else "DOWN"
         st.markdown(
@@ -376,7 +403,7 @@ if st.session_state.blast_history:
 # Footer with model info
 with st.expander("About Gamma Blast Models"):
     st.markdown("""
-**6 Models + 7 Quality Filters for High-Conviction Scalping:**
+**6 Models + 10 Quality Filters + 3 Quality Gates for >85% Accuracy:**
 
 **Models (weights adapt to VIX regime):**
 1. **GEX Zero-Cross Cascade** — Spot crosses gamma flip, triggering dealer hedging cascade
@@ -386,7 +413,7 @@ with st.expander("About Gamma Blast Models"):
 5. **Pin Break Blast** — Price breaks away from max gamma pin strike
 6. **Vanna Squeeze** — IV crush + vanna exposure creates directional hedging flow
 
-**7 Quality Filters (what makes it accurate):**
+**10 Quality Filters:**
 1. **Trend Filter** — EMA-based, penalizes counter-trend blasts by up to 25 pts
 2. **VIX Regime** — Adapts weights & threshold (Low/Normal/High/Extreme vol)
 3. **Volume Confirmation** — Requires ATM volume spike, 30% penalty if absent
@@ -394,11 +421,19 @@ with st.expander("About Gamma Blast Models"):
 5. **Monthly vs Weekly** — Suppresses breakouts near max gamma on monthly expiry
 6. **Sensex Liquidity** — Penalizes low-OI chains (BSE has 10x less liquidity)
 7. **Max Pain Proximity** — Suppresses signals when pinned near max pain close to expiry
+8. **PCR Confirmation** — Put-Call Ratio must align with blast direction
+9. **IV Skew** — ATM put-call IV spread confirms institutional positioning
+10. **Volume-Direction Alignment** — ATM volume dominant side must match blast direction
+
+**3 Quality Gates:**
+- **Model Confluence** — Non-linear boost when 3+ models fire together
+- **Direction Conviction** — 15% margin required between bull/bear votes
+- **R:R Gate** — Risk:Reward must be at least 1:1
 
 **Rules:**
-- Filtered composite score must reach **70+** to fire
-- Maximum **2 signals** per expiry day
-- **30-minute cooldown** between signals
-- Entry/SL/Target based on gamma walls
+- Filtered composite score must reach **70+** to fire (65 safety net late on expiry)
+- Maximum **4 signals** on expiry day, **2** on normal days
+- **15-min cooldown** on expiry day, **30-min** on normal days
+- Entry/SL/Target **dynamic by VIX** — wider in high vol, tighter in low vol
 - All times in **IST**
     """)

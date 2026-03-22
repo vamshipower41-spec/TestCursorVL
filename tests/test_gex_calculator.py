@@ -88,7 +88,7 @@ class TestFindGammaFlip:
     def test_finds_flip_level(self):
         chain = make_chain()
         gex = compute_gex_profile(chain, 22000, 65)
-        flip = find_gamma_flip(gex, 22000)
+        flip = find_gamma_flip(gex)
         # Should find a flip level somewhere near the spot
         assert flip is not None
         assert 20000 < flip < 24000
@@ -98,7 +98,7 @@ class TestFindGammaFlip:
         chain = make_chain()
         chain["put_oi"] = 0  # Remove all put OI
         gex = compute_gex_profile(chain, 22000, 65)
-        flip = find_gamma_flip(gex, 22000)
+        flip = find_gamma_flip(gex)
         # Cumulative may still not cross zero
         # This depends on the data — just verify it doesn't crash
         assert flip is None or isinstance(flip, float)

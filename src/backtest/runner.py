@@ -265,23 +265,45 @@ class BacktestRunner:
         # Entry LTP
         entry_ltp = self._get_option_ltp(entry_chain, strike, opt_type)
 
-        # Exit: use last available snapshot (or the one where target was hit)
+        # Skip trades with zero entry LTP (strike not found or worthless)
+        if entry_ltp <= 0:
+            exit_ts = entry_ts
+            exit_ltp = 0.0
+            exit_spot = entry_spot
+            return TradeRecord(
+                signal_type=signal.signal_type,
+                direction=signal.direction,
+                signal_strength=signal.strength,
+                entry_time=entry_ts if isinstance(entry_ts, datetime) else datetime.fromisoformat(str(entry_ts)),
+                exit_time=exit_ts if isinstance(exit_ts, datetime) else datetime.fromisoformat(str(exit_ts)),
+                spot_at_entry=entry_spot,
+                spot_at_exit=exit_spot,
+                strike_price=strike,
+                option_type=opt_type,
+                entry_ltp=0.0,
+                exit_ltp=0.0,
+                pnl_points=0.0,
+                pnl_pct=0.0,
+                predicted_level=signal.level,
+                hit_target=outcome.hit_target,
+                reason=f"Skipped: zero entry LTP for {strike} {opt_type}",
+            )
+
+        # Realistic exit: use NEXT snapshot (no look-ahead bias)
+        # Previously used "best future LTP" which was unrealistic
         exit_idx = min(snap_idx + 1, len(snapshots) - 1)
-        best_exit_idx = exit_idx
-        best_exit_ltp = 0.0
-
-        # Walk forward to find best exit or last snapshot
-        for j in range(snap_idx + 1, len(snapshots)):
-            _, chain_j, _ = snapshots[j]
-            ltp_j = self._get_option_ltp(chain_j, strike, opt_type)
-            if ltp_j > best_exit_ltp:
-                best_exit_ltp = ltp_j
-                best_exit_idx = j
-
-        # Use last snapshot as actual exit (realistic: hold till data ends)
-        last_idx = len(snapshots) - 1
-        exit_ts, exit_chain, exit_spot = snapshots[last_idx]
+        exit_ts, exit_chain, exit_spot = snapshots[exit_idx]
         exit_ltp = self._get_option_ltp(exit_chain, strike, opt_type)
+
+        # If exit LTP is 0 (strike dropped from chain), try subsequent snapshots
+        if exit_ltp <= 0:
+            for j in range(exit_idx + 1, min(exit_idx + 4, len(snapshots))):
+                _, chain_j, _ = snapshots[j]
+                ltp_j = self._get_option_ltp(chain_j, strike, opt_type)
+                if ltp_j > 0:
+                    exit_ts, _, exit_spot = snapshots[j]
+                    exit_ltp = ltp_j
+                    break
 
         # Calculate P&L
         pnl_points = exit_ltp - entry_ltp
