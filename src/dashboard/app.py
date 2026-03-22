@@ -157,7 +157,8 @@ _pages_dir = Path(__file__).parent / "pages"
 
 pages = {
     "Trading": [
-        st.Page(str(_pages_dir / "market_radar.py"), title="Market Radar", icon="🎯", default=True),
+        st.Page(str(_pages_dir / "action_center.py"), title="Action Center", icon="🎯", default=True),
+        st.Page(str(_pages_dir / "market_radar.py"), title="Market Radar", icon="📡"),
         st.Page(str(_pages_dir / "paper_trades.py"), title="Paper Trades", icon="📋"),
     ],
     "Advanced": [
