@@ -72,3 +72,26 @@ TREND_ALERT_MIN_MOVE_PCT = 0.003  # 0.3%
 
 # Directional trend alerts: cooldown between alerts (minutes)
 TREND_ALERT_COOLDOWN_MINUTES = 30
+
+# --- Multi-Expiry GEX Settings ---
+MULTI_EXPIRY_COUNT = 2  # Number of expiries to aggregate (nearest + next)
+MULTI_EXPIRY_MIN_OI_SHARE = 0.05  # Min OI share to include an expiry (5%)
+
+# --- OI Flow Settings ---
+OI_FLOW_CONFIDENCE_THRESHOLD = 0.4  # Min confidence to use flow data in blast scoring
+OI_FLOW_DOMINANCE_RATIO = 1.2  # Bull/bear ratio to classify dominant flow
+
+# --- Pattern Matcher Settings ---
+PATTERN_MATCH_MIN_SAMPLES = 5  # Min historical trades for confidence
+PATTERN_MATCH_CONFIDENCE_GATE = 0.3  # Min confidence to adjust blast score
+
+# --- WebSocket Trigger Settings ---
+WS_TRIGGER_PROXIMITY_PCT = 0.002  # 0.2% from critical level triggers fetch
+WS_MIN_TRIGGER_INTERVAL = 30  # Min seconds between triggered chain fetches
+WS_MAX_TRIGGER_INTERVAL = 120  # Max seconds between periodic fetches (fallback)
+WS_VELOCITY_THRESHOLD = 5.0  # Points/sec for velocity-based trigger
+
+# --- Paper Trade Settings ---
+PAPER_TRADE_DIR = "data/paper_trades"
+PAPER_TRADE_TELEGRAM_ALERTS = True  # Send outcome alerts to Telegram
+PAPER_TRADE_DAILY_SUMMARY = True  # Send daily summary at market close
