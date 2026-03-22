@@ -48,35 +48,83 @@ def _get_credentials() -> tuple[str, str] | None:
     return None
 
 
-def send_telegram(message: str) -> bool:
-    """Send a message via Telegram Bot API.
+_last_send_error: str = ""  # Stores last error for dashboard feedback
 
-    Returns True if sent successfully, False otherwise.
+
+def get_last_send_error() -> str:
+    """Return the last Telegram send error message (for dashboard display)."""
+    return _last_send_error
+
+
+def validate_credentials() -> tuple[bool, str]:
+    """Check if Telegram credentials are configured and valid.
+
+    Returns (is_valid, message).
     """
     creds = _get_credentials()
     if creds is None:
-        logger.warning("Telegram credentials not configured — skipping alert.")
+        return False, "TELEGRAM_BOT_TOKEN and/or TELEGRAM_CHAT_ID not set in env or Streamlit secrets."
+    token, chat_id = creds
+    if not token.strip():
+        return False, "TELEGRAM_BOT_TOKEN is empty."
+    if not chat_id.strip():
+        return False, "TELEGRAM_CHAT_ID is empty."
+    return True, "Credentials configured."
+
+
+def send_telegram(message: str, max_retries: int = 2) -> bool:
+    """Send a message via Telegram Bot API with retry logic.
+
+    Retries up to max_retries times on network failure.
+    Returns True if sent successfully, False otherwise.
+    """
+    global _last_send_error
+
+    creds = _get_credentials()
+    if creds is None:
+        _last_send_error = "Telegram credentials not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing)."
+        logger.warning(_last_send_error)
         return False
 
     token, chat_id = creds
-    try:
-        resp = requests.post(
-            _SEND_URL.format(token=token),
-            json={
-                "chat_id": chat_id,
-                "text": message,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-            },
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            return True
-        logger.error("Telegram API error %s: %s", resp.status_code, resp.text)
-        return False
-    except Exception as exc:
-        logger.error("Telegram send failed: %s", exc)
-        return False
+
+    for attempt in range(1, max_retries + 2):  # 1 initial + max_retries
+        try:
+            resp = requests.post(
+                _SEND_URL.format(token=token),
+                json={
+                    "chat_id": chat_id,
+                    "text": message,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                },
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                _last_send_error = ""
+                return True
+            _last_send_error = f"Telegram API error {resp.status_code}: {resp.text[:200]}"
+            logger.error(_last_send_error)
+            # Don't retry on auth errors (401, 403) or bad request (400)
+            if resp.status_code in (400, 401, 403):
+                return False
+        except requests.exceptions.Timeout:
+            _last_send_error = f"Telegram send timed out (attempt {attempt}/{max_retries + 1})"
+            logger.warning(_last_send_error)
+        except requests.exceptions.ConnectionError as exc:
+            _last_send_error = f"Telegram connection error: {exc} (attempt {attempt}/{max_retries + 1})"
+            logger.warning(_last_send_error)
+        except Exception as exc:
+            _last_send_error = f"Telegram send failed: {exc}"
+            logger.error(_last_send_error)
+            return False  # Unknown error, don't retry
+
+        # Wait before retry (exponential backoff: 2s, 4s)
+        if attempt <= max_retries:
+            import time
+            time.sleep(2 ** attempt)
+
+    return False
 
 
 # ---------------------------------------------------------------------------

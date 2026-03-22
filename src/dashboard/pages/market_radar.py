@@ -29,6 +29,7 @@ except ImportError:
 from config.instruments import get_instrument, INSTRUMENTS
 from config.settings import (
     BLAST_MAX_SIGNALS_PER_DAY,
+    BLAST_MAX_SIGNALS_NORMAL_DAY,
     EXPIRY_DAY_POLL_INTERVAL,
     DASHBOARD_REFRESH_INTERVAL,
     TELEGRAM_ENABLED,
