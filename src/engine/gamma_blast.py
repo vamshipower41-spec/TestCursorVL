@@ -25,6 +25,7 @@ from src.data.models import GEXProfile, GammaBlast, BlastComponent
 from src.engine.charm_vanna import (
     compute_charm_flow,
     compute_vanna_exposure,
+    compute_oi_change,
 )
 from src.engine.blast_filters import apply_all_filters, classify_vix_regime
 from config.settings import (
@@ -188,8 +189,19 @@ def detect_gamma_blast(
     if direction:
         direction_votes[direction] += score * w
 
+    # Compute OI change for confirmation (enrichment, not a scored model)
+    oi_data = compute_oi_change(chain_df, prev_chain_df, profile.spot_price)
+
     # Compute raw composite score
     composite = sum(c.score * c.weight for c in components)
+
+    # OI buildup near ATM boosts confidence; unwinding penalizes
+    if oi_data["oi_intensity"] > 30 and oi_data["net_oi_change"] > 0:
+        # Fresh OI buildup = more gamma fuel, boost up to +5 pts
+        composite = min(composite + oi_data["oi_intensity"] * 0.05, 100.0)
+    elif oi_data["oi_intensity"] > 30 and oi_data["net_oi_change"] < 0:
+        # OI unwinding = gamma dissipating, penalize up to -5 pts
+        composite = max(composite - oi_data["oi_intensity"] * 0.05, 0.0)
 
     # Determine direction
     if direction_votes["bullish"] == 0 and direction_votes["bearish"] == 0:
@@ -244,6 +256,11 @@ def detect_gamma_blast(
             "vanna_data": {
                 "net_vanna_flow": vanna_data["net_vanna_flow"],
                 "vanna_intensity": vanna_data["vanna_intensity"],
+            },
+            "oi_data": {
+                "net_oi_change": oi_data["net_oi_change"],
+                "oi_intensity": oi_data["oi_intensity"],
+                "surge_strikes": oi_data["oi_surge_strikes"][:3],
             },
         },
     )
