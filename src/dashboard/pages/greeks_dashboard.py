@@ -124,7 +124,7 @@ try:
     gamma_vals = bs_chain[gamma_col].tolist() if gamma_col in bs_chain.columns else chain_df["call_gamma"].tolist()
 
     # Find peak gamma
-    max_gamma_idx = gamma_vals.index(max(gamma_vals)) if gamma_vals else 0
+    max_gamma_idx = gamma_vals.index(max(gamma_vals)) if len(gamma_vals) > 0 else 0
     peak_strike = strikes[max_gamma_idx] if strikes else 0
 
     fig_gamma.add_trace(go.Scatter(
