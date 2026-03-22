@@ -45,6 +45,7 @@ st.markdown(
 st.subheader("Quick Token Update")
 new_token = st.text_input("Paste new access token:", type="password")
 if st.button("Save Token") and new_token:
+    import os as _os
     env_path = Path(".env")
     # Preserve existing .env content, only update the token line
     lines = env_path.read_text().splitlines() if env_path.exists() else []
@@ -57,6 +58,11 @@ if st.button("Save Token") and new_token:
     if not updated:
         lines.append(f"UPSTOX_ACCESS_TOKEN={new_token}")
     env_path.write_text("\n".join(lines) + "\n")
+    # Restrict file permissions to owner-only (rw-------)
+    try:
+        _os.chmod(env_path, 0o600)
+    except OSError:
+        pass  # Windows or restricted filesystem — skip silently
     st.success("Token saved to .env file. Refresh the page to activate.")
     st.rerun()
 

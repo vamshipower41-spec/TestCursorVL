@@ -5,19 +5,21 @@ allowing a gamma blast to fire. Each filter can suppress or boost the
 composite score based on real market conditions.
 
 Filters:
-1. Trend Filter — EMA-based, prevents counter-trend blasts in strong trends
-2. VIX Regime — adapts thresholds and weights based on volatility regime
-3. Volume Confirmation — requires volume spike at key strikes
-4. Smart Timing — post-1:30 PM IST blasts are more reliable (charm zone)
-5. Monthly vs Weekly — monthly = pin bias, weekly = breakout bias
-6. Sensex Liquidity — minimum OI threshold for Sensex (lower liquidity index)
-7. Max Pain Proximity — suppress breakout signals when pinned near max pain
-8. Adaptive Weights — shift model weights based on VIX and time-of-day
+1.  Trend Filter — EMA-based, prevents counter-trend blasts in strong trends
+2.  VIX Regime — adapts thresholds and weights based on volatility regime
+3.  Volume Confirmation — requires volume spike at key strikes
+4.  Smart Timing — post-1:30 PM IST blasts are more reliable (charm zone)
+5.  Monthly vs Weekly — monthly = pin bias, weekly = breakout bias
+6.  Sensex Liquidity — minimum OI threshold for Sensex (lower liquidity index)
+7.  Max Pain Proximity — suppress breakout signals when pinned near max pain
+8.  PCR Directional — put-call ratio confirms or contradicts blast direction
+9.  IV Skew — ATM put-call IV skew for directional fear detection
+10. Volume-Direction Alignment — ATM volume dominant side must match direction
 """
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 import numpy as np
 import pandas as pd
@@ -244,7 +246,11 @@ def apply_volume_filter(blast_score: float, volume_data: dict) -> float:
 # 4. Smart Timing
 # ---------------------------------------------------------------------------
 
-def apply_timing_filter(blast_score: float, time_to_expiry_hours: float) -> float:
+def apply_timing_filter(
+    blast_score: float,
+    time_to_expiry_hours: float,
+    timestamp: datetime | None = None,
+) -> float:
     """Adjust score based on time of day on expiry day.
 
     Research shows:
@@ -255,7 +261,7 @@ def apply_timing_filter(blast_score: float, time_to_expiry_hours: float) -> floa
 
     Returns adjusted score.
     """
-    minutes = market_minutes_elapsed()
+    minutes = market_minutes_elapsed(timestamp)
 
     if minutes < 0:
         # Before market open
@@ -366,6 +372,9 @@ def compute_max_pain(chain_df: pd.DataFrame, spot_price: float) -> float | None:
     if chain_df.empty:
         return None
 
+    if "call_oi" not in chain_df.columns or "put_oi" not in chain_df.columns:
+        return None
+
     strikes = chain_df["strike_price"].values
     min_pain = float("inf")
     max_pain_strike = None
@@ -419,6 +428,149 @@ def apply_max_pain_filter(
 
 
 # ---------------------------------------------------------------------------
+# 8. PCR (Put-Call Ratio) Directional Confirmation
+# ---------------------------------------------------------------------------
+
+def compute_pcr(chain_df: pd.DataFrame) -> dict:
+    """Compute Put-Call Ratio from total OI — the most-watched Indian options indicator.
+
+    PCR interpretation for NIFTY/SENSEX:
+      - PCR > 1.3  → strongly bullish (heavy put writing = institutions providing support)
+      - PCR 0.9-1.3 → neutral
+      - PCR < 0.7  → strongly bearish (heavy call writing = resistance above)
+
+    Returns:
+        - pcr: float ratio
+        - pcr_signal: "bullish", "bearish", or "neutral"
+    """
+    if "put_oi" not in chain_df.columns or "call_oi" not in chain_df.columns:
+        return {"pcr": 0.0, "pcr_signal": "neutral"}
+
+    total_put_oi = int(chain_df["put_oi"].sum())
+    total_call_oi = int(chain_df["call_oi"].sum())
+
+    if total_call_oi == 0:
+        return {"pcr": 0.0, "pcr_signal": "neutral"}
+
+    pcr = total_put_oi / total_call_oi
+
+    if pcr > 1.3:
+        pcr_signal = "bullish"
+    elif pcr < 0.7:
+        pcr_signal = "bearish"
+    else:
+        pcr_signal = "neutral"
+
+    return {"pcr": round(pcr, 3), "pcr_signal": pcr_signal}
+
+
+def apply_pcr_filter(blast_score: float, blast_direction: str, pcr_data: dict) -> float:
+    """Boost with-PCR blasts, penalize against-PCR blasts.
+
+    When PCR strongly disagrees with blast direction, it's a red flag:
+    - Bullish blast but PCR < 0.7 (call writers dominating) → penalize
+    - Bearish blast but PCR > 1.3 (put writers dominating) → penalize
+    """
+    pcr_signal = pcr_data["pcr_signal"]
+
+    if pcr_signal == "neutral":
+        return blast_score
+
+    if blast_direction == pcr_signal:
+        # PCR confirms blast direction — boost up to +8 pts
+        return min(blast_score + 8.0, 100.0)
+    else:
+        # PCR contradicts blast direction — penalize 20%
+        return blast_score * 0.80
+
+
+# ---------------------------------------------------------------------------
+# 9. IV Skew Directional Confirmation
+# ---------------------------------------------------------------------------
+
+def compute_iv_skew(chain_df: pd.DataFrame, spot_price: float) -> dict:
+    """Compute ATM IV skew (put IV - call IV) for directional fear detection.
+
+    When put IV >> call IV at ATM: bearish fear (put buyers aggressive, paying up)
+    When call IV >> put IV at ATM: bullish positioning (call demand high)
+
+    This is a strong confirmation signal for blast direction.
+    """
+    # Select ATM strikes (within 0.5% of spot)
+    atm_mask = ((chain_df["strike_price"] - spot_price).abs() / spot_price) < 0.005
+    atm = chain_df[atm_mask]
+
+    if atm.empty or "call_iv" not in atm.columns or "put_iv" not in atm.columns:
+        return {"iv_skew": 0.0, "skew_signal": "neutral"}
+
+    # Filter out zero IVs (stale data)
+    valid = atm[(atm["call_iv"] > 0) & (atm["put_iv"] > 0)]
+    if valid.empty:
+        return {"iv_skew": 0.0, "skew_signal": "neutral"}
+
+    avg_call_iv = float(valid["call_iv"].mean())
+    avg_put_iv = float(valid["put_iv"].mean())
+
+    # Skew = put_iv - call_iv (positive = bearish fear)
+    iv_skew = avg_put_iv - avg_call_iv
+
+    # Significant skew threshold: 2 IV points
+    if iv_skew > 2.0:
+        skew_signal = "bearish"
+    elif iv_skew < -2.0:
+        skew_signal = "bullish"
+    else:
+        skew_signal = "neutral"
+
+    return {"iv_skew": round(iv_skew, 2), "skew_signal": skew_signal}
+
+
+def apply_iv_skew_filter(
+    blast_score: float, blast_direction: str, skew_data: dict,
+) -> float:
+    """Boost when IV skew confirms direction, penalize contradictions."""
+    skew_signal = skew_data["skew_signal"]
+
+    if skew_signal == "neutral":
+        return blast_score
+
+    if blast_direction == skew_signal:
+        # IV skew confirms — institutional fear/greed aligns with blast
+        return min(blast_score + 5.0, 100.0)
+    else:
+        # IV skew contradicts — the options market disagrees with our direction
+        return blast_score * 0.85
+
+
+# ---------------------------------------------------------------------------
+# 10. Volume-Direction Alignment
+# ---------------------------------------------------------------------------
+
+def check_volume_direction_alignment(
+    blast_direction: str, volume_data: dict,
+) -> float:
+    """Penalize when ATM volume dominant side contradicts blast direction.
+
+    If blast says bullish but put volume dominates ATM, something is wrong.
+    """
+    dominant = volume_data.get("dominant_side", "balanced")
+
+    if dominant == "balanced":
+        return 0.0  # No adjustment
+
+    # Call volume dominance aligns with bullish, put with bearish
+    aligned = (
+        (blast_direction == "bullish" and dominant == "call")
+        or (blast_direction == "bearish" and dominant == "put")
+    )
+
+    if aligned:
+        return 5.0  # Boost
+    else:
+        return -10.0  # Penalty: volume contradicts direction
+
+
+# ---------------------------------------------------------------------------
 # Combined filter application
 # ---------------------------------------------------------------------------
 
@@ -459,8 +611,8 @@ def apply_all_filters(
     details["volume"] = vol_data
     details["after_volume"] = score
 
-    # 4. Smart timing
-    score = apply_timing_filter(score, time_to_expiry_hours)
+    # 4. Smart timing (use profile timestamp for backtest accuracy)
+    score = apply_timing_filter(score, time_to_expiry_hours, profile.timestamp)
     details["after_timing"] = score
 
     # 5. Monthly vs weekly
@@ -478,6 +630,24 @@ def apply_all_filters(
     score = apply_max_pain_filter(score, profile.spot_price, max_pain, time_to_expiry_hours)
     details["max_pain"] = max_pain
     details["after_max_pain"] = score
+
+    # 8. PCR directional confirmation
+    pcr_data = compute_pcr(chain_df)
+    score = apply_pcr_filter(score, blast_direction, pcr_data)
+    details["pcr"] = pcr_data
+    details["after_pcr"] = score
+
+    # 9. IV skew directional confirmation
+    skew_data = compute_iv_skew(chain_df, profile.spot_price)
+    score = apply_iv_skew_filter(score, blast_direction, skew_data)
+    details["iv_skew"] = skew_data
+    details["after_iv_skew"] = score
+
+    # 10. Volume-direction alignment
+    vol_dir_adj = check_volume_direction_alignment(blast_direction, vol_data)
+    score = max(min(score + vol_dir_adj, 100.0), 0.0)
+    details["volume_direction_adj"] = vol_dir_adj
+    details["after_vol_direction"] = score
 
     details["final_score"] = round(score, 1)
     return round(score, 1), details

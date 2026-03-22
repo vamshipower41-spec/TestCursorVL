@@ -46,7 +46,7 @@ def compute_gex_profile(
     return gex
 
 
-def find_gamma_flip(gex_profile: pd.DataFrame, spot_price: float) -> float | None:
+def find_gamma_flip(gex_profile: pd.DataFrame) -> float | None:
     """Find the price level where cumulative net GEX crosses zero.
 
     Above the gamma flip: positive gamma regime (stabilizing, mean-reverting).
@@ -140,7 +140,7 @@ def build_gex_profile(
 
     gex_df = compute_gex_profile(chain_df, spot_price, contract_multiplier)
 
-    gamma_flip = find_gamma_flip(gex_df, spot_price)
+    gamma_flip = find_gamma_flip(gex_df)
     max_gamma = find_max_gamma_strike(gex_df)
     zero_levels = find_zero_gex_levels(gex_df)
     walls = compute_gamma_walls(gex_df)

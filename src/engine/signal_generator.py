@@ -70,7 +70,7 @@ def _check_gamma_flip(
     direction = "bullish" if curr_above else "bearish"
 
     # Strength: proportional to how significant the GEX change is across the flip
-    gex_change = abs(current.net_gex_total - (previous.net_gex_total if previous else 0))
+    gex_change = abs(current.net_gex_total - previous.net_gex_total)
     max_gex = max(abs(current.net_gex_total), 1.0)
     strength = min(gex_change / max_gex, 1.0)
 
@@ -143,7 +143,7 @@ def _check_breakout(profile: GEXProfile) -> list[GEXSignal]:
 
     # Check call wall breach (upside breakout)
     if profile.call_wall is not None:
-        move_pct = (profile.spot_price - profile.call_wall) / profile.spot_price
+        move_pct = (profile.spot_price - profile.call_wall) / profile.call_wall
         if move_pct > BREAKOUT_MIN_MOVE_PCT:
             strength = min(move_pct / (BREAKOUT_MIN_MOVE_PCT * 3), 1.0)
             signals.append(
@@ -164,7 +164,7 @@ def _check_breakout(profile: GEXProfile) -> list[GEXSignal]:
 
     # Check put wall breach (downside breakout)
     if profile.put_wall is not None:
-        move_pct = (profile.put_wall - profile.spot_price) / profile.spot_price
+        move_pct = (profile.put_wall - profile.spot_price) / profile.put_wall
         if move_pct > BREAKOUT_MIN_MOVE_PCT:
             strength = min(move_pct / (BREAKOUT_MIN_MOVE_PCT * 3), 1.0)
             signals.append(

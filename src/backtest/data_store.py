@@ -42,7 +42,7 @@ class HistoricalDataStore:
         dir_path = self.base_path / instrument / expiry_date
         dir_path.mkdir(parents=True, exist_ok=True)
 
-        filename = f"chain_{timestamp:%H%M}.parquet"
+        filename = f"chain_{timestamp:%H%M%S}.parquet"
         file_path = dir_path / filename
 
         # Add metadata columns

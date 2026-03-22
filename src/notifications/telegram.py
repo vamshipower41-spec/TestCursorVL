@@ -48,35 +48,83 @@ def _get_credentials() -> tuple[str, str] | None:
     return None
 
 
-def send_telegram(message: str) -> bool:
-    """Send a message via Telegram Bot API.
+_last_send_error: str = ""  # Stores last error for dashboard feedback
 
-    Returns True if sent successfully, False otherwise.
+
+def get_last_send_error() -> str:
+    """Return the last Telegram send error message (for dashboard display)."""
+    return _last_send_error
+
+
+def validate_credentials() -> tuple[bool, str]:
+    """Check if Telegram credentials are configured and valid.
+
+    Returns (is_valid, message).
     """
     creds = _get_credentials()
     if creds is None:
-        logger.warning("Telegram credentials not configured — skipping alert.")
+        return False, "TELEGRAM_BOT_TOKEN and/or TELEGRAM_CHAT_ID not set in env or Streamlit secrets."
+    token, chat_id = creds
+    if not token.strip():
+        return False, "TELEGRAM_BOT_TOKEN is empty."
+    if not chat_id.strip():
+        return False, "TELEGRAM_CHAT_ID is empty."
+    return True, "Credentials configured."
+
+
+def send_telegram(message: str, max_retries: int = 2) -> bool:
+    """Send a message via Telegram Bot API with retry logic.
+
+    Retries up to max_retries times on network failure.
+    Returns True if sent successfully, False otherwise.
+    """
+    global _last_send_error
+
+    creds = _get_credentials()
+    if creds is None:
+        _last_send_error = "Telegram credentials not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing)."
+        logger.warning(_last_send_error)
         return False
 
     token, chat_id = creds
-    try:
-        resp = requests.post(
-            _SEND_URL.format(token=token),
-            json={
-                "chat_id": chat_id,
-                "text": message,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-            },
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            return True
-        logger.error("Telegram API error %s: %s", resp.status_code, resp.text)
-        return False
-    except Exception as exc:
-        logger.error("Telegram send failed: %s", exc)
-        return False
+
+    for attempt in range(1, max_retries + 2):  # 1 initial + max_retries
+        try:
+            resp = requests.post(
+                _SEND_URL.format(token=token),
+                json={
+                    "chat_id": chat_id,
+                    "text": message,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                },
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                _last_send_error = ""
+                return True
+            _last_send_error = f"Telegram API error {resp.status_code}: {resp.text[:200]}"
+            logger.error(_last_send_error)
+            # Don't retry on auth errors (401, 403) or bad request (400)
+            if resp.status_code in (400, 401, 403):
+                return False
+        except requests.exceptions.Timeout:
+            _last_send_error = f"Telegram send timed out (attempt {attempt}/{max_retries + 1})"
+            logger.warning(_last_send_error)
+        except requests.exceptions.ConnectionError as exc:
+            _last_send_error = f"Telegram connection error: {exc} (attempt {attempt}/{max_retries + 1})"
+            logger.warning(_last_send_error)
+        except Exception as exc:
+            _last_send_error = f"Telegram send failed: {exc}"
+            logger.error(_last_send_error)
+            return False  # Unknown error, don't retry
+
+        # Wait before retry (exponential backoff: 2s, 4s)
+        if attempt <= max_retries:
+            import time
+            time.sleep(2 ** attempt)
+
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -280,3 +328,81 @@ class DirectionalTracker:
 def send_directional_alert(message: str) -> bool:
     """Send a directional trend alert to Telegram."""
     return send_telegram(message)
+
+
+# ---------------------------------------------------------------------------
+# Paper trade outcome alerts
+# ---------------------------------------------------------------------------
+
+def format_paper_trade_outcome(trade) -> str:
+    """Format a closed paper trade into a Telegram-friendly message."""
+    if trade.outcome == "target_hit":
+        icon = "\u2705"  # ✅
+        label = "TARGET HIT"
+    elif trade.outcome == "sl_hit":
+        icon = "\u274c"  # ❌
+        label = "STOP LOSS HIT"
+    else:
+        icon = "\u23f0"  # ⏰
+        label = "EXPIRED"
+
+    dir_arrow = "\U0001F7E2" if trade.direction == "bullish" else "\U0001F534"
+    pnl_sign = "+" if trade.pnl_points >= 0 else ""
+
+    msg = (
+        f"{icon} <b>Paper Trade — {label}</b>\n"
+        f"\n"
+        f"{dir_arrow} {trade.instrument} {trade.direction.upper()}\n"
+        f"Entry : {trade.entry_price:,.2f}\n"
+        f"Exit  : {trade.exit_price:,.2f}\n"
+        f"P&L   : <b>{pnl_sign}{trade.pnl_points:,.0f} pts ({pnl_sign}{trade.pnl_pct:.2f}%)</b>\n"
+        f"Duration: {trade.duration_minutes:.0f} min\n"
+        f"Score : {trade.composite_score:.0f}/100\n"
+    )
+
+    if trade.max_favorable:
+        fav_pts = abs(trade.max_favorable - trade.entry_price)
+        msg += f"Max Favorable: {fav_pts:,.0f} pts\n"
+
+    return msg
+
+
+def send_paper_trade_alert(trade) -> bool:
+    """Send a paper trade outcome alert to Telegram."""
+    msg = format_paper_trade_outcome(trade)
+    return send_telegram(msg)
+
+
+def format_daily_summary(stats: dict, instrument: str) -> str:
+    """Format daily paper trading summary for Telegram."""
+    total = stats.get("total_trades", 0)
+    if total == 0:
+        return f"\U0001F4CA <b>{instrument} — Daily Summary</b>\n\nNo trades today."
+
+    hit_rate = stats.get("hit_rate", 0)
+    avg_pnl = stats.get("avg_pnl_pct", 0)
+    best = stats.get("best_trade_pnl", 0)
+    worst = stats.get("worst_trade_pnl", 0)
+    profit_factor = stats.get("profit_factor", 0)
+    win_streak = stats.get("max_win_streak", 0)
+
+    perf_icon = "\U0001F4C8" if avg_pnl > 0 else "\U0001F4C9"  # 📈 / 📉
+
+    msg = (
+        f"{perf_icon} <b>{instrument} — Daily Summary</b>\n"
+        f"\n"
+        f"Trades : {total}\n"
+        f"Hit Rate: <b>{hit_rate:.0%}</b>\n"
+        f"Avg P&L : {avg_pnl:+.2f}%\n"
+        f"Best    : {best:+.2f}%\n"
+        f"Worst   : {worst:+.2f}%\n"
+        f"Profit Factor: {profit_factor:.2f}\n"
+        f"Win Streak: {win_streak}\n"
+    )
+    return msg
+
+
+def send_daily_summary(stats: dict, instrument: str) -> bool:
+    """Send daily paper trading summary to Telegram."""
+    msg = format_daily_summary(stats, instrument)
+    return send_telegram(msg)
