@@ -158,13 +158,17 @@ _pages_dir = Path(__file__).parent / "pages"
 pages = {
     "Trading": [
         st.Page(str(_pages_dir / "market_radar.py"), title="Market Radar", icon="🎯", default=True),
+        st.Page(str(_pages_dir / "paper_trades.py"), title="Paper Trades", icon="📋"),
     ],
     "Advanced": [
         st.Page(str(_pages_dir / "gamma_blast.py"), title="Gamma Blast (Pro)", icon="💥"),
         st.Page(str(_pages_dir / "live_gex.py"), title="Live GEX Monitor", icon="📈"),
+        st.Page(str(_pages_dir / "multi_expiry.py"), title="Multi-Expiry GEX", icon="📊"),
     ],
     "Analysis": [
         st.Page(str(_pages_dir / "signals.py"), title="Signal Timeline", icon="🔔"),
+        st.Page(str(_pages_dir / "oi_flow.py"), title="OI Flow Analysis", icon="🔄"),
+        st.Page(str(_pages_dir / "greeks_dashboard.py"), title="Greeks Dashboard", icon="📐"),
         st.Page(str(_pages_dir / "backtest_results.py"), title="Backtest Results", icon="📊"),
     ],
     "Config": [

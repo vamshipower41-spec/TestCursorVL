@@ -328,3 +328,81 @@ class DirectionalTracker:
 def send_directional_alert(message: str) -> bool:
     """Send a directional trend alert to Telegram."""
     return send_telegram(message)
+
+
+# ---------------------------------------------------------------------------
+# Paper trade outcome alerts
+# ---------------------------------------------------------------------------
+
+def format_paper_trade_outcome(trade) -> str:
+    """Format a closed paper trade into a Telegram-friendly message."""
+    if trade.outcome == "target_hit":
+        icon = "\u2705"  # ✅
+        label = "TARGET HIT"
+    elif trade.outcome == "sl_hit":
+        icon = "\u274c"  # ❌
+        label = "STOP LOSS HIT"
+    else:
+        icon = "\u23f0"  # ⏰
+        label = "EXPIRED"
+
+    dir_arrow = "\U0001F7E2" if trade.direction == "bullish" else "\U0001F534"
+    pnl_sign = "+" if trade.pnl_points >= 0 else ""
+
+    msg = (
+        f"{icon} <b>Paper Trade — {label}</b>\n"
+        f"\n"
+        f"{dir_arrow} {trade.instrument} {trade.direction.upper()}\n"
+        f"Entry : {trade.entry_price:,.2f}\n"
+        f"Exit  : {trade.exit_price:,.2f}\n"
+        f"P&L   : <b>{pnl_sign}{trade.pnl_points:,.0f} pts ({pnl_sign}{trade.pnl_pct:.2f}%)</b>\n"
+        f"Duration: {trade.duration_minutes:.0f} min\n"
+        f"Score : {trade.composite_score:.0f}/100\n"
+    )
+
+    if trade.max_favorable:
+        fav_pts = abs(trade.max_favorable - trade.entry_price)
+        msg += f"Max Favorable: {fav_pts:,.0f} pts\n"
+
+    return msg
+
+
+def send_paper_trade_alert(trade) -> bool:
+    """Send a paper trade outcome alert to Telegram."""
+    msg = format_paper_trade_outcome(trade)
+    return send_telegram(msg)
+
+
+def format_daily_summary(stats: dict, instrument: str) -> str:
+    """Format daily paper trading summary for Telegram."""
+    total = stats.get("total_trades", 0)
+    if total == 0:
+        return f"\U0001F4CA <b>{instrument} — Daily Summary</b>\n\nNo trades today."
+
+    hit_rate = stats.get("hit_rate", 0)
+    avg_pnl = stats.get("avg_pnl_pct", 0)
+    best = stats.get("best_trade_pnl", 0)
+    worst = stats.get("worst_trade_pnl", 0)
+    profit_factor = stats.get("profit_factor", 0)
+    win_streak = stats.get("max_win_streak", 0)
+
+    perf_icon = "\U0001F4C8" if avg_pnl > 0 else "\U0001F4C9"  # 📈 / 📉
+
+    msg = (
+        f"{perf_icon} <b>{instrument} — Daily Summary</b>\n"
+        f"\n"
+        f"Trades : {total}\n"
+        f"Hit Rate: <b>{hit_rate:.0%}</b>\n"
+        f"Avg P&L : {avg_pnl:+.2f}%\n"
+        f"Best    : {best:+.2f}%\n"
+        f"Worst   : {worst:+.2f}%\n"
+        f"Profit Factor: {profit_factor:.2f}\n"
+        f"Win Streak: {win_streak}\n"
+    )
+    return msg
+
+
+def send_daily_summary(stats: dict, instrument: str) -> bool:
+    """Send daily paper trading summary to Telegram."""
+    msg = format_daily_summary(stats, instrument)
+    return send_telegram(msg)
