@@ -103,6 +103,8 @@ def _check_pin_risk(
         return []
     if time_to_expiry_hours > PIN_RISK_MAX_HOURS_TO_EXPIRY:
         return []
+    if profile.spot_price <= 0:
+        return []
 
     distance_pct = abs(profile.spot_price - profile.max_gamma_strike) / profile.spot_price
 
@@ -138,11 +140,13 @@ def _check_breakout(profile: GEXProfile) -> list[GEXSignal]:
     """
     if profile.net_gex_total >= 0:
         return []  # Only signal in negative gamma regime
+    if profile.spot_price <= 0:
+        return []
 
     signals = []
 
     # Check call wall breach (upside breakout)
-    if profile.call_wall is not None:
+    if profile.call_wall is not None and profile.call_wall > 0:
         move_pct = (profile.spot_price - profile.call_wall) / profile.call_wall
         if move_pct > BREAKOUT_MIN_MOVE_PCT:
             strength = min(move_pct / (BREAKOUT_MIN_MOVE_PCT * 3), 1.0)
@@ -163,7 +167,7 @@ def _check_breakout(profile: GEXProfile) -> list[GEXSignal]:
             )
 
     # Check put wall breach (downside breakout)
-    if profile.put_wall is not None:
+    if profile.put_wall is not None and profile.put_wall > 0:
         move_pct = (profile.put_wall - profile.spot_price) / profile.put_wall
         if move_pct > BREAKOUT_MIN_MOVE_PCT:
             strength = min(move_pct / (BREAKOUT_MIN_MOVE_PCT * 3), 1.0)
@@ -232,6 +236,8 @@ def _check_zero_gex_instability(profile: GEXProfile) -> list[GEXSignal]:
     price can swing in either direction.
     """
     if not profile.zero_gex_levels:
+        return []
+    if profile.spot_price <= 0:
         return []
 
     signals = []

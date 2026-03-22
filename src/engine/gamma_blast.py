@@ -404,6 +404,8 @@ def _score_gex_zero_cross(
         return 0.0, None
     if previous.gamma_flip_level is None:
         return 0.0, None
+    if current.spot_price <= 0 or previous.spot_price <= 0:
+        return 0.0, None
 
     prev_above = previous.spot_price > previous.gamma_flip_level
     curr_above = current.spot_price > current.gamma_flip_level
@@ -442,6 +444,8 @@ def _score_gamma_wall_breach(
     gamma, this creates explosive directional moves.
     """
     if previous is None:
+        return 0.0, None
+    if current.spot_price <= 0 or previous.spot_price <= 0:
         return 0.0, None
 
     score = 0.0
@@ -573,6 +577,8 @@ def _score_pin_break(
     if current.max_gamma_strike is None:
         return 0.0, None
     if previous is None or previous.max_gamma_strike is None:
+        return 0.0, None
+    if current.spot_price <= 0 or previous.spot_price <= 0:
         return 0.0, None
 
     # Was price pinned before?

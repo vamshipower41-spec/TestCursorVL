@@ -44,17 +44,24 @@ class CriticalLevels:
     zero_gex_levels: list[float] = field(default_factory=list)
 
 
+from config.settings import (
+    WS_TRIGGER_PROXIMITY_PCT,
+    WS_MIN_TRIGGER_INTERVAL,
+    WS_MAX_TRIGGER_INTERVAL,
+    WS_VELOCITY_THRESHOLD,
+)
+
 # How close to a level (as % of spot) triggers a fetch
-PROXIMITY_TRIGGER_PCT = 0.002  # 0.2%
+PROXIMITY_TRIGGER_PCT = WS_TRIGGER_PROXIMITY_PCT
 
 # Minimum seconds between triggered fetches (prevent API hammering)
-MIN_FETCH_INTERVAL_SECONDS = 30
+MIN_FETCH_INTERVAL_SECONDS = WS_MIN_TRIGGER_INTERVAL
 
 # Maximum seconds between periodic fetches (fallback)
-MAX_FETCH_INTERVAL_SECONDS = 120
+MAX_FETCH_INTERVAL_SECONDS = WS_MAX_TRIGGER_INTERVAL
 
 # Velocity threshold: pts/second that triggers a fetch (fast move detection)
-VELOCITY_TRIGGER_PTS_PER_SEC = 5.0
+VELOCITY_TRIGGER_PTS_PER_SEC = WS_VELOCITY_THRESHOLD
 
 
 class RealtimeTriggerEngine:

@@ -56,8 +56,8 @@ VANNA_IV_DROP_MIN = 1.5
 # Blast signal cooldown: minimum minutes between blast signals
 BLAST_COOLDOWN_MINUTES = 30
 
-# Expiry day polling interval (faster than normal)
-EXPIRY_DAY_POLL_INTERVAL = 60  # 1 minute on expiry day
+# Expiry day polling interval (faster than normal for scalping)
+EXPIRY_DAY_POLL_INTERVAL = 15  # 15 seconds on expiry day — catches gamma blasts quickly
 
 # --- Telegram Alert Settings ---
 
@@ -87,8 +87,8 @@ PATTERN_MATCH_CONFIDENCE_GATE = 0.3  # Min confidence to adjust blast score
 
 # --- WebSocket Trigger Settings ---
 WS_TRIGGER_PROXIMITY_PCT = 0.002  # 0.2% from critical level triggers fetch
-WS_MIN_TRIGGER_INTERVAL = 30  # Min seconds between triggered chain fetches
-WS_MAX_TRIGGER_INTERVAL = 120  # Max seconds between periodic fetches (fallback)
+WS_MIN_TRIGGER_INTERVAL = 15  # Min seconds between triggered chain fetches (was 30)
+WS_MAX_TRIGGER_INTERVAL = 60  # Max seconds between periodic fetches (was 120)
 WS_VELOCITY_THRESHOLD = 5.0  # Points/sec for velocity-based trigger
 
 # --- Prepare Alert Settings (early warning before blast) ---
