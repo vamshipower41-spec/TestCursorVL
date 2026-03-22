@@ -231,90 +231,86 @@ st.markdown(f"""
 st.markdown("### Where is the Market?")
 
 ceiling = profile.call_wall or (spot_price + 500)
-floor = profile.put_wall or (spot_price - 500)
+floor_level = profile.put_wall or (spot_price - 500)
 magnet = profile.max_gamma_strike
 flip = profile.gamma_flip_level
 
 # Calculate position percentage (0=floor, 100=ceiling)
-price_range = ceiling - floor
-if price_range > 0:
-    position_pct = max(0, min(100, ((spot_price - floor) / price_range) * 100))
-else:
-    position_pct = 50
+price_range = ceiling - floor_level
+if price_range <= 0:
+    price_range = 1000  # fallback to avoid division by zero
+
+position_pct = max(0, min(100, ((spot_price - floor_level) / price_range) * 100))
+spot_top_px = 40 + (100 - position_pct) * 1.2
 
 # Determine zone description
 if profile.net_gex_total > 0:
-    zone_text = "Stable Zone — Dealers are cushioning moves"
+    zone_label = "STABLE ZONE — Dealers are cushioning moves"
     zone_color = "#26a69a"
-    zone_emoji = "&#128994;"  # 🟢
 else:
-    zone_text = "Volatile Zone — Moves get amplified!"
+    zone_label = "VOLATILE ZONE — Moves get amplified!"
     zone_color = "#ef5350"
-    zone_emoji = "&#128308;"  # 🔴
 
-# Visual market map
+# Build magnet HTML
+magnet_html = ""
+if magnet and price_range > 0:
+    magnet_pct = max(0, min(100, ((magnet - floor_level) / price_range) * 100))
+    magnet_top = 40 + (100 - magnet_pct) * 1.2
+    magnet_html = (
+        f'<div style="position:absolute; top:{magnet_top:.0f}px; right:0; transform:translateY(-50%);">'
+        f'<div style="color:#2196f3; font-size:0.85rem; font-weight:600;">'
+        f'Magnet: {magnet:,.0f}</div></div>'
+    )
+
+# Build flip HTML
+flip_html = ""
+if flip and price_range > 0:
+    flip_pct = max(0, min(100, ((flip - floor_level) / price_range) * 100))
+    flip_top = 40 + (100 - flip_pct) * 1.2
+    flip_html = (
+        f'<div style="position:absolute; top:{flip_top:.0f}px; left:0; transform:translateY(-50%);">'
+        f'<div style="color:#ffc107; font-size:0.85rem; font-weight:600;">'
+        f'Flip: {flip:,.0f}</div></div>'
+    )
+
+# Simple key levels as metrics (always works, no complex HTML positioning)
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Ceiling", f"{ceiling:,.0f}", help="Resistance — price bounces down here")
+col2.metric("Floor", f"{floor_level:,.0f}", help="Support — price bounces up here")
+col3.metric("Magnet", f"{magnet:,.0f}" if magnet else "N/A", help="Price gets pulled here near expiry")
+col4.metric("Flip Level", f"{flip:,.0f}" if flip else "N/A", help="Above=stable, Below=volatile")
+
+# Zone + position indicator
 st.markdown(f"""
 <div style="background:#1a1a2e; border:1px solid #333; border-radius:12px; padding:20px; margin:8px 0;">
-
-    <!-- Zone indicator -->
     <div style="text-align:center; margin-bottom:16px;">
-        <span style="font-size:1.1rem; color:{zone_color}; font-weight:700;">
-            {zone_emoji} {zone_text}
-        </span>
+        <span style="font-size:1.1rem; color:{zone_color}; font-weight:700;">{zone_label}</span>
     </div>
-
-    <!-- Price map bar -->
-    <div style="position:relative; height:200px; margin:0 40px;">
-
-        <!-- Ceiling (Call Wall) -->
+    <div style="position:relative; height:220px; margin:0 40px;">
         <div style="position:absolute; top:0; left:0; right:0; text-align:center;">
             <div style="background:#1b3a26; color:#26a69a; padding:6px 12px; border-radius:6px;
                         display:inline-block; font-weight:700; font-size:0.95rem;">
-                &#9650; CEILING (Resistance): {ceiling:,.0f}
+                CEILING: {ceiling:,.0f}
             </div>
             <div style="color:#888; font-size:0.8rem; margin-top:2px;">Price unlikely to go above this easily</div>
         </div>
-
-        <!-- Vertical track -->
         <div style="position:absolute; top:40px; bottom:40px; left:50%; width:8px;
                     background:linear-gradient(to bottom, #26a69a, #ffc107, #ef5350);
                     border-radius:4px; transform:translateX(-50%);"></div>
-
-        <!-- Current Price marker -->
-        <div style="position:absolute; top:{40 + (100 - position_pct) * 1.2}px; left:50%;
+        <div style="position:absolute; top:{spot_top_px:.0f}px; left:50%;
                     transform:translate(-50%, -50%); z-index:10;">
             <div style="background:white; color:#000; padding:6px 14px; border-radius:20px;
                         font-weight:900; font-size:1.1rem; white-space:nowrap;
                         box-shadow: 0 0 12px rgba(255,255,255,0.4);">
-                &#9679; {spot_price:,.2f}
+                {spot_price:,.2f}
             </div>
         </div>
-
-        <!-- Magnet level -->
-        {"" if not magnet else f'''
-        <div style="position:absolute; top:{40 + (100 - max(0, min(100, ((magnet - floor) / price_range) * 100))) * 1.2}px;
-                    right:0; transform:translateY(-50%);">
-            <div style="color:#2196f3; font-size:0.85rem; font-weight:600;">
-                &#9881; Magnet: {magnet:,.0f}
-            </div>
-        </div>
-        '''}
-
-        <!-- Gamma Flip level -->
-        {"" if not flip else f'''
-        <div style="position:absolute; top:{40 + (100 - max(0, min(100, ((flip - floor) / price_range) * 100))) * 1.2}px;
-                    left:0; transform:translateY(-50%);">
-            <div style="color:#ffc107; font-size:0.85rem; font-weight:600;">
-                &#9888; Flip: {flip:,.0f}
-            </div>
-        </div>
-        '''}
-
-        <!-- Floor (Put Wall) -->
+        {magnet_html}
+        {flip_html}
         <div style="position:absolute; bottom:0; left:0; right:0; text-align:center;">
             <div style="background:#3a1b1b; color:#ef5350; padding:6px 12px; border-radius:6px;
                         display:inline-block; font-weight:700; font-size:0.95rem;">
-                &#9660; FLOOR (Support): {floor:,.0f}
+                FLOOR: {floor_level:,.0f}
             </div>
             <div style="color:#888; font-size:0.8rem; margin-top:2px;">Price unlikely to fall below this easily</div>
         </div>
@@ -399,10 +395,10 @@ if ceiling and abs(spot_price - ceiling) < price_range * 0.15:
          f"This is where call sellers have big positions. Price may bounce down from here, "
          f"OR if it breaks above — expect a fast move up!")
     )
-elif floor and abs(spot_price - floor) < price_range * 0.15:
+elif floor_level and abs(spot_price - floor_level) < price_range * 0.15:
     explanations.append(
         ("&#9888;", "Price is NEAR the Floor!",
-         f"Getting close to the support level at {floor:,.0f}. "
+         f"Getting close to the support level at {floor_level:,.0f}. "
          f"This is where put sellers have big positions. Price may bounce up from here, "
          f"OR if it breaks below — expect a fast move down!")
     )
