@@ -44,7 +44,11 @@ from src.engine.gex_calculator import build_gex_profile
 from src.engine.greeks import validate_greeks, filter_active_strikes
 from src.engine.signal_generator import generate_signals
 from src.engine.gamma_blast import detect_gamma_blast
-from src.engine.blast_filters import compute_trend_bias
+from src.engine.blast_filters import compute_trend_bias, compute_pcr, compute_iv_skew
+from src.engine.multi_expiry_gex import aggregate_multi_expiry_gex
+from src.engine.oi_flow import classify_oi_flow
+from src.engine.bs_greeks import compute_dealer_charm_flow
+from config.settings import MULTI_EXPIRY_COUNT
 
 
 # --- Setup ---
@@ -160,6 +164,56 @@ except Exception:
 vix_val = st.session_state.action_vix_value
 tte = compute_tte(expiry_date)
 trend_data = compute_trend_bias(st.session_state.action_price_history)
+
+# --- Multi-Expiry GEX ---
+multi_expiry_info = None
+try:
+    expiry_chains_raw = fetcher.fetch_multi_expiry_chains(
+        inst["instrument_key"], count=MULTI_EXPIRY_COUNT,
+    )
+    expiry_chains = []
+    for exp, cdf, sp in expiry_chains_raw:
+        if not cdf.empty:
+            cdf = validate_greeks(cdf)
+            cdf = filter_active_strikes(cdf, sp, num_strikes=40)
+            exp_tte = compute_tte(exp)
+            expiry_chains.append((exp, cdf, exp_tte))
+    if expiry_chains:
+        multi_expiry_info = aggregate_multi_expiry_gex(
+            expiry_chains, spot_price, inst["contract_multiplier"],
+        )
+except Exception:
+    pass
+
+# --- OI Flow ---
+oi_flow_info = None
+prev_chain = st.session_state.action_prev_chain
+if prev_chain is not None and not prev_chain.empty:
+    try:
+        oi_flow_info = classify_oi_flow(chain_df_filtered, prev_chain, spot_price)
+    except Exception:
+        pass
+
+# --- PCR & IV Skew ---
+pcr_info = None
+iv_skew_info = None
+try:
+    pcr_info = compute_pcr(chain_df_filtered)
+except Exception:
+    pass
+try:
+    iv_skew_info = compute_iv_skew(chain_df_filtered, spot_price)
+except Exception:
+    pass
+
+# --- Charm Flow ---
+charm_info = None
+try:
+    charm_info = compute_dealer_charm_flow(
+        chain_df_filtered, spot_price, tte, inst["contract_multiplier"],
+    )
+except Exception:
+    pass
 
 # Run blast detection
 blast = detect_gamma_blast(
@@ -377,11 +431,12 @@ else:
 
 
 # =====================================================
-# QUICK STATUS — 4 simple cards
+# QUICK STATUS — 6 simple cards (2 rows of 3)
 # =====================================================
 st.markdown("---")
 
-c1, c2, c3, c4 = st.columns(4)
+# Row 1: Trend, Zone, VIX
+c1, c2, c3 = st.columns(3)
 
 # Card 1: Market Direction
 if trend == "bullish":
@@ -447,7 +502,67 @@ else:
     </div>
     """, unsafe_allow_html=True)
 
-# Card 4: Time to Expiry
+# Row 2: OI Flow, PCR, Time to Expiry
+c4, c5, c6 = st.columns(3)
+
+# Card 4: OI Flow — Who's buying?
+if oi_flow_info:
+    _dom = oi_flow_info.get("dominant_flow", "neutral")
+    _conf = oi_flow_info.get("flow_confidence", 0)
+    if _dom == "bullish":
+        oi_text, oi_color, oi_bg = "BUYING", "#26a69a", "#0d2818"
+        oi_desc = "Big players buying calls"
+    elif _dom == "bearish":
+        oi_text, oi_color, oi_bg = "SELLING", "#ef5350", "#2d0a0a"
+        oi_desc = "Big players buying puts"
+    else:
+        oi_text, oi_color, oi_bg = "MIXED", "#ffc107", "#2d2a0a"
+        oi_desc = "No clear flow"
+    c4.markdown(f"""
+    <div style="background:{oi_bg}; border-radius:12px; padding:16px; text-align:center;">
+        <div style="color:{oi_color}; font-size:1.5rem; font-weight:900;">{oi_text}</div>
+        <div style="color:#888; font-size:0.85rem;">Money Flow (OI)</div>
+        <div style="color:#aaa; font-size:0.8rem;">{oi_desc}</div>
+    </div>
+    """, unsafe_allow_html=True)
+else:
+    c4.markdown("""
+    <div style="background:#1a1a2e; border-radius:12px; padding:16px; text-align:center;">
+        <div style="color:#888; font-size:1.5rem; font-weight:900;">LOADING</div>
+        <div style="color:#888; font-size:0.85rem;">Money Flow (OI)</div>
+        <div style="color:#aaa; font-size:0.8rem;">Needs 2 refreshes</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# Card 5: Put-Call Ratio
+if pcr_info:
+    _pcr = pcr_info.get("pcr", 0)
+    _pcr_sig = pcr_info.get("pcr_signal", "neutral")
+    if _pcr_sig == "bullish":
+        pcr_text, pcr_color, pcr_bg = "BULLISH", "#26a69a", "#0d2818"
+        pcr_desc = "Heavy put writing = support"
+    elif _pcr_sig == "bearish":
+        pcr_text, pcr_color, pcr_bg = "BEARISH", "#ef5350", "#2d0a0a"
+        pcr_desc = "Heavy call writing = resistance"
+    else:
+        pcr_text, pcr_color, pcr_bg = "NEUTRAL", "#4a90d9", "#0a1a2d"
+        pcr_desc = "Balanced positioning"
+    c5.markdown(f"""
+    <div style="background:{pcr_bg}; border-radius:12px; padding:16px; text-align:center;">
+        <div style="color:{pcr_color}; font-size:1.5rem; font-weight:900;">{pcr_text}</div>
+        <div style="color:#888; font-size:0.85rem;">Put-Call Ratio</div>
+        <div style="color:#aaa; font-size:0.8rem;">PCR: {_pcr:.2f}</div>
+    </div>
+    """, unsafe_allow_html=True)
+else:
+    c5.markdown("""
+    <div style="background:#1a1a2e; border-radius:12px; padding:16px; text-align:center;">
+        <div style="color:#888; font-size:1.5rem; font-weight:900;">N/A</div>
+        <div style="color:#888; font-size:0.85rem;">Put-Call Ratio</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# Card 6: Time to Expiry
 if is_expiry:
     if tte < 2:
         tte_text, tte_color, tte_bg = f"{tte:.1f}h", "#ef5350", "#2d0a0a"
@@ -462,13 +577,166 @@ else:
     tte_text, tte_color, tte_bg = "N/A", "#888", "#1a1a2e"
     tte_desc = "Not expiry day"
 
-c4.markdown(f"""
+c6.markdown(f"""
 <div style="background:{tte_bg}; border-radius:12px; padding:16px; text-align:center;">
     <div style="color:{tte_color}; font-size:1.5rem; font-weight:900;">{tte_text}</div>
     <div style="color:#888; font-size:0.85rem;">Time to Expiry</div>
     <div style="color:#aaa; font-size:0.8rem;">{tte_desc}</div>
 </div>
 """, unsafe_allow_html=True)
+
+
+# =====================================================
+# MARKET INTELLIGENCE — All confirmations in plain English
+# =====================================================
+st.markdown("---")
+st.markdown("### Market Intelligence")
+st.caption("All engines combined — what each one is telling us right now")
+
+_intel = []
+
+# 1. OI Flow insight
+if oi_flow_info:
+    _dom = oi_flow_info.get("dominant_flow", "neutral")
+    _conf = oi_flow_info.get("flow_confidence", 0)
+    _net_bull = oi_flow_info.get("net_bought_calls", 0) + oi_flow_info.get("net_sold_puts", 0)
+    _net_bear = oi_flow_info.get("net_bought_puts", 0) + oi_flow_info.get("net_sold_calls", 0)
+    if _dom == "bullish":
+        _intel.append(("&#128176;", "Money Flow", "BULLISH", "#26a69a",
+                       f"Big players are net bullish — bought calls + sold puts = {_net_bull:,} "
+                       f"vs bearish {_net_bear:,}. Confidence: {_conf:.0%}"))
+    elif _dom == "bearish":
+        _intel.append(("&#128176;", "Money Flow", "BEARISH", "#ef5350",
+                       f"Big players are net bearish — bought puts + sold calls = {_net_bear:,} "
+                       f"vs bullish {_net_bull:,}. Confidence: {_conf:.0%}"))
+    else:
+        _intel.append(("&#128176;", "Money Flow", "MIXED", "#ffc107",
+                       f"No clear direction from options flow. Bull: {_net_bull:,}, Bear: {_net_bear:,}"))
+
+# 2. PCR insight
+if pcr_info:
+    _pcr = pcr_info.get("pcr", 0)
+    _pcr_sig = pcr_info.get("pcr_signal", "neutral")
+    if _pcr_sig == "bullish":
+        _intel.append(("&#9878;", "Put-Call Ratio", f"BULLISH ({_pcr:.2f})", "#26a69a",
+                       f"PCR above 1.3 means heavy put writing — institutions are providing "
+                       f"support below. They don't expect the market to fall much."))
+    elif _pcr_sig == "bearish":
+        _intel.append(("&#9878;", "Put-Call Ratio", f"BEARISH ({_pcr:.2f})", "#ef5350",
+                       f"PCR below 0.7 means heavy call writing — institutions see resistance "
+                       f"above. They don't expect the market to rise much."))
+    else:
+        _intel.append(("&#9878;", "Put-Call Ratio", f"NEUTRAL ({_pcr:.2f})", "#4a90d9",
+                       f"Put-Call Ratio is balanced. No strong bias from options writers."))
+
+# 3. IV Skew insight
+if iv_skew_info:
+    _skew = iv_skew_info.get("iv_skew", 0)
+    _skew_sig = iv_skew_info.get("skew_signal", "neutral")
+    if _skew_sig == "bearish":
+        _intel.append(("&#128200;", "IV Skew", "BEARISH", "#ef5350",
+                       f"Put premiums are higher than calls (skew: {_skew:.2f}). "
+                       f"Traders are paying more for downside protection — they're worried about a fall."))
+    elif _skew_sig == "bullish":
+        _intel.append(("&#128200;", "IV Skew", "BULLISH", "#26a69a",
+                       f"Call premiums are higher than puts (skew: {_skew:.2f}). "
+                       f"Traders are paying more for upside — they expect a rally."))
+    else:
+        _intel.append(("&#128200;", "IV Skew", "NEUTRAL", "#4a90d9",
+                       f"IV skew is flat ({_skew:.2f}). No unusual directional bets from options traders."))
+
+# 4. Charm Flow insight
+if charm_info:
+    _charm_flow = charm_info.get("net_charm_flow", 0)
+    _charm_intensity = charm_info.get("charm_intensity", 0)
+    if _charm_flow > 0 and _charm_intensity > 20:
+        _intel.append(("&#9203;", "Time Decay Flow", "BULLISH", "#26a69a",
+                       f"As options expire, dealers need to BUY the index to stay hedged. "
+                       f"This creates upward pressure. Intensity: {_charm_intensity:.0f}/100"))
+    elif _charm_flow < 0 and _charm_intensity > 20:
+        _intel.append(("&#9203;", "Time Decay Flow", "BEARISH", "#ef5350",
+                       f"As options expire, dealers need to SELL the index to stay hedged. "
+                       f"This creates downward pressure. Intensity: {_charm_intensity:.0f}/100"))
+    else:
+        _intel.append(("&#9203;", "Time Decay Flow", "NEUTRAL", "#888",
+                       f"Time decay effect is weak right now. Intensity: {_charm_intensity:.0f}/100"))
+
+# 5. Multi-Expiry insight
+if multi_expiry_info:
+    _wflip = multi_expiry_info.get("weighted_gamma_flip")
+    _r_calls = multi_expiry_info.get("reinforced_call_walls", [])
+    _r_puts = multi_expiry_info.get("reinforced_put_walls", [])
+    _parts = []
+    if _wflip and flip:
+        _diff = abs(_wflip - flip)
+        if _diff > 50:
+            _parts.append(
+                f"Multi-expiry flip ({_wflip:,.0f}) differs from single ({flip:,.0f}) by {_diff:,.0f} pts. "
+                f"Trust the multi-expiry level more.")
+        else:
+            _parts.append(f"Both single and multi-expiry flip levels agree around {_wflip:,.0f}. Strong level!")
+    if _r_calls:
+        _parts.append(f"{len(_r_calls)} reinforced ceiling(s) — extra strong resistance.")
+    if _r_puts:
+        _parts.append(f"{len(_r_puts)} reinforced floor(s) — extra strong support.")
+    if not _r_calls and not _r_puts:
+        _parts.append("No reinforced walls found — single-expiry walls may be weaker.")
+
+    _multi_label = "CONFIRMS" if (_r_calls or _r_puts) else "NO EXTRA"
+    _multi_color = "#26a69a" if (_r_calls or _r_puts) else "#888"
+    _intel.append(("&#128202;", "Multi-Expiry", _multi_label, _multi_color,
+                   " ".join(_parts)))
+
+# Render intel cards
+for emoji, source, verdict, color, detail in _intel:
+    st.markdown(f"""
+    <div style="display:flex; align-items:flex-start; background:#1a1a2e;
+                border-left:4px solid {color}; border-radius:0 8px 8px 0;
+                padding:12px 16px; margin:6px 0;">
+        <div style="min-width:160px;">
+            <div style="color:white; font-weight:700; font-size:0.95rem;">{emoji} {source}</div>
+            <div style="color:{color}; font-weight:900; font-size:0.85rem; margin-top:2px;">{verdict}</div>
+        </div>
+        <div style="color:#aaa; font-size:0.9rem; line-height:1.5;">{detail}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# --- Confirmation Score ---
+_bull_count = sum(1 for _, _, v, _, _ in _intel if "BULLISH" in v or v == "BUYING")
+_bear_count = sum(1 for _, _, v, _, _ in _intel if "BEARISH" in v or v == "SELLING")
+_total = len(_intel)
+
+if _total > 0:
+    if _bull_count > _bear_count and _bull_count >= 3:
+        _conf_text = f"{_bull_count} of {_total} signals are BULLISH"
+        _conf_color = "#26a69a"
+        _conf_verdict = "Strong Bullish Confirmation"
+    elif _bear_count > _bull_count and _bear_count >= 3:
+        _conf_text = f"{_bear_count} of {_total} signals are BEARISH"
+        _conf_color = "#ef5350"
+        _conf_verdict = "Strong Bearish Confirmation"
+    elif _bull_count > _bear_count:
+        _conf_text = f"{_bull_count} bullish vs {_bear_count} bearish out of {_total}"
+        _conf_color = "#26a69a"
+        _conf_verdict = "Slight Bullish Lean"
+    elif _bear_count > _bull_count:
+        _conf_text = f"{_bear_count} bearish vs {_bull_count} bullish out of {_total}"
+        _conf_color = "#ef5350"
+        _conf_verdict = "Slight Bearish Lean"
+    else:
+        _conf_text = f"Split signals — {_bull_count} bullish, {_bear_count} bearish"
+        _conf_color = "#ffc107"
+        _conf_verdict = "No Clear Consensus — Wait"
+
+    st.markdown(f"""
+    <div style="background:#111; border:2px solid {_conf_color}; border-radius:12px;
+                padding:16px; text-align:center; margin:12px 0;">
+        <div style="color:{_conf_color}; font-size:1.3rem; font-weight:900;">
+            {_conf_verdict}
+        </div>
+        <div style="color:#888; font-size:0.95rem; margin-top:4px;">{_conf_text}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 # =====================================================
@@ -480,21 +748,32 @@ st.markdown("### Key Price Levels")
 levels = []
 if call_wall:
     dist = call_wall - spot_price
+    _reinforced = ""
+    if multi_expiry_info and call_wall in multi_expiry_info.get("reinforced_call_walls", []):
+        _reinforced = " | REINFORCED (extra strong!)"
     levels.append(("Ceiling", call_wall, "#26a69a",
-                   f"Price bounces DOWN from here | {dist:,.0f} pts above spot"))
+                   f"Price bounces DOWN from here | {dist:,.0f} pts above spot{_reinforced}"))
 if flip:
     dist = spot_price - flip
     side = "above" if dist > 0 else "below"
+    _multi_note = ""
+    if multi_expiry_info:
+        _wflip = multi_expiry_info.get("weighted_gamma_flip")
+        if _wflip:
+            _multi_note = f" | Multi-expiry flip: {_wflip:,.0f}"
     levels.append(("Flip Level", flip, "#ffc107",
-                   f"Spot is {abs(dist):,.0f} pts {side} | Above = stable, Below = volatile"))
+                   f"Spot is {abs(dist):,.0f} pts {side} | Above = stable, Below = volatile{_multi_note}"))
 if magnet:
     dist = abs(spot_price - magnet)
     levels.append(("Magnet", magnet, "#2196f3",
                    f"Price gets pulled here | {dist:,.0f} pts away"))
 if put_wall:
     dist = spot_price - put_wall
+    _reinforced = ""
+    if multi_expiry_info and put_wall in multi_expiry_info.get("reinforced_put_walls", []):
+        _reinforced = " | REINFORCED (extra strong!)"
     levels.append(("Floor", put_wall, "#ef5350",
-                   f"Price bounces UP from here | {dist:,.0f} pts below spot"))
+                   f"Price bounces UP from here | {dist:,.0f} pts below spot{_reinforced}"))
 
 for name, value, color, desc in levels:
     st.markdown(f"""
