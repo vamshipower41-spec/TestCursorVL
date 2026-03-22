@@ -95,7 +95,7 @@ try:
     st.subheader("Expiry Contributions")
     for contrib in result["expiry_contributions"]:
         c1, c2, c3 = st.columns(3)
-        c1.metric(f"Expiry: {contrib.expiry}", f"TTE: {contrib.tte_hours:.1f}h")
+        c1.metric(f"Expiry: {contrib.expiry_date}", f"OI: {contrib.total_oi:,}")
         c2.metric("OI Weight", f"{contrib.oi_weight:.0%}")
         c3.metric("Net GEX", f"{contrib.net_gex:,.0f}")
 
