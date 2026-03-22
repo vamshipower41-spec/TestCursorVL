@@ -330,14 +330,14 @@ explanations = []
 if profile.net_gex_total > 0:
     explanations.append(
         ("&#128994;", "Market is in a STABLE zone",
-         f"When price is above the Gamma Flip level ({flip:,.0f if flip else 'N/A'}), "
+         f"When price is above the Gamma Flip level ({f'{flip:,.0f}' if flip else 'N/A'}), "
          f"big institutions (dealers) act like shock absorbers — they SELL when market goes up "
          f"and BUY when it goes down. This keeps the market calm and range-bound.")
     )
 else:
     explanations.append(
         ("&#128308;", "Market is in a VOLATILE zone",
-         f"When price is below the Gamma Flip level ({flip:,.0f if flip else 'N/A'}), "
+         f"When price is below the Gamma Flip level ({f'{flip:,.0f}' if flip else 'N/A'}), "
          f"dealers do the OPPOSITE — they BUY when market goes up and SELL when it goes down. "
          f"This AMPLIFIES moves. Expect bigger swings!")
     )
