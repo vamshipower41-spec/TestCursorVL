@@ -13,7 +13,7 @@ if _project_root not in sys.path:
 import streamlit as st
 from pathlib import Path
 
-from src.auth.upstox_auth import load_access_token, validate_token
+from src.auth.upstox_auth import load_access_token, validate_token, _save_token_to_file
 from config.instruments import INSTRUMENTS
 from config.settings import CHAIN_POLL_INTERVAL, DASHBOARD_REFRESH_INTERVAL, TELEGRAM_ENABLED
 from src.notifications.telegram import send_telegram
@@ -63,7 +63,10 @@ if st.button("Save Token") and new_token:
         _os.chmod(env_path, 0o600)
     except OSError:
         pass  # Windows or restricted filesystem — skip silently
-    st.success("Token saved to .env file. Refresh the page to activate.")
+    # Also save to persistent file + session state
+    _save_token_to_file(new_token)
+    st.session_state["upstox_access_token"] = new_token
+    st.success("Token saved! You won't need to login again today.")
     st.rerun()
 
 # Instrument info
