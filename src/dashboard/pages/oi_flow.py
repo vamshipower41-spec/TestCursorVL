@@ -84,16 +84,16 @@ try:
     c1.metric("Dominant Flow", dominant.upper(), delta=f"{confidence:.0%} confidence")
     c2.metric("Net Dealer Delta", f"{flow_result['net_dealer_delta']:,.0f}")
 
-    net_bullish = flow_result["net_bought_calls"] + flow_result["net_sold_puts"]
-    net_bearish = flow_result["net_bought_puts"] + flow_result["net_sold_calls"]
+    net_bullish = flow_result.get("net_bought_calls", 0) + flow_result.get("net_sold_puts", 0)
+    net_bearish = flow_result.get("net_bought_puts", 0) + flow_result.get("net_sold_calls", 0)
     c3.metric("Bull/Bear OI", f"{net_bullish:,.0f} / {net_bearish:,.0f}")
 
     # --- OI Flow Breakdown ---
     c4, c5, c6, c7 = st.columns(4)
-    c4.metric("Bought Calls", f"{flow_result['net_bought_calls']:,}")
-    c5.metric("Sold Calls", f"{flow_result['net_sold_calls']:,}")
-    c6.metric("Bought Puts", f"{flow_result['net_bought_puts']:,}")
-    c7.metric("Sold Puts", f"{flow_result['net_sold_puts']:,}")
+    c4.metric("Bought Calls", f"{flow_result.get('net_bought_calls', 0):,}")
+    c5.metric("Sold Calls", f"{flow_result.get('net_sold_calls', 0):,}")
+    c6.metric("Bought Puts", f"{flow_result.get('net_bought_puts', 0):,}")
+    c7.metric("Sold Puts", f"{flow_result.get('net_sold_puts', 0):,}")
 
     # --- Strike-by-Strike Flow Chart ---
     strike_flows = flow_result.get("strike_flows", [])

@@ -12,6 +12,7 @@ After 50+ signals across 10+ expiry days, you have real statistics.
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -58,6 +59,7 @@ class PaperTrader:
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.active_trades: dict[str, PaperTrade] = {}
+        self._io_lock = threading.Lock()
         self._load_active_trades()
 
     def open_trade(self, blast: GammaBlast) -> PaperTrade:
@@ -202,7 +204,7 @@ class PaperTrader:
         else:
             trade.pnl_points = trade.entry_price - exit_price
 
-        trade.pnl_pct = trade.pnl_points / trade.entry_price * 100
+        trade.pnl_pct = (trade.pnl_points / trade.entry_price * 100) if trade.entry_price != 0 else 0.0
 
         self._append_log(trade, "CLOSE")
 
@@ -217,7 +219,7 @@ class PaperTrader:
         # Don't persist full price path in log (too large)
         record["price_path_len"] = len(record.pop("price_path", []))
 
-        with open(log_file, "a") as f:
+        with self._io_lock, open(log_file, "a") as f:
             f.write(json.dumps(record) + "\n")
 
     def _load_active_trades(self):
