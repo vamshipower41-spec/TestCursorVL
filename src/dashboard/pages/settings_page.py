@@ -98,12 +98,40 @@ TELEGRAM_CHAT_ID = "your_chat_id"
 """)
 
 st.markdown("**You will receive alerts for:**")
-st.markdown("- Gamma Blast signals (entry/SL/target with model breakdown)")
-st.markdown("- Sustained directional moves (bullish or bearish, NOT consolidation)")
+st.markdown("- **Prepare Alerts** — early warning when models are warming up near key levels (CALL/PUT heads-up)")
+st.markdown("- **Gamma Blast signals** — entry/SL/target with model breakdown")
+st.markdown("- **Directional trend alerts** — sustained bullish or bearish moves")
 
 if st.button("Send Test Alert"):
-    msg = "\U0001F514 <b>Test Alert</b>\n\nTelegram alerts are working! You will receive:\n\n• Gamma Blast signals\n• Directional trend alerts"
+    msg = "\U0001F514 <b>Test Alert</b>\n\nTelegram alerts are working! You will receive:\n\n\u26a1 Prepare alerts (early warning)\n\U0001F4A5 Gamma Blast signals\n\U0001F4C8 Directional trend alerts"
     if send_telegram(msg):
         st.success("Test alert sent! Check your Telegram.")
     else:
         st.error("Failed to send. Check that TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set in Secrets.")
+
+# Background worker status
+st.subheader("Background Alert Worker")
+from src.engine.alert_worker import _worker_started
+if _worker_started:
+    st.success("Background worker is RUNNING — alerts will be sent even if you close this tab.")
+else:
+    st.warning("Background worker not started. Go to any page to activate it.")
+
+st.markdown("""
+**How it works:**
+- A background thread monitors NIFTY & SENSEX automatically
+- Sends Telegram alerts every ~90 seconds during market hours (9:15 AM - 3:30 PM)
+- Works even if you switch apps or lock your phone
+
+**To keep alerts running all day (important!):**
+
+Since this is on Streamlit Cloud, the app sleeps if no one visits for a while.
+To prevent this, set up a **free ping service**:
+
+1. Go to [UptimeRobot](https://uptimerobot.com) (free) or [cron-job.org](https://cron-job.org)
+2. Add your app URL as a monitor
+3. Set check interval to **5 minutes**
+4. This keeps the app awake → background alerts run all day
+
+Your app URL: the Streamlit Cloud URL (e.g., `https://your-app.streamlit.app`)
+""")
