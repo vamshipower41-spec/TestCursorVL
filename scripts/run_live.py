@@ -40,6 +40,8 @@ from src.notifications.telegram import (
     send_directional_alert,
 )
 from src.backtest.data_store import HistoricalDataStore
+from src.backtest.paper_trader import PaperTrader
+from src.engine.realtime_trigger import RealtimeTriggerEngine, CriticalLevels
 
 
 def compute_time_to_expiry_hours(expiry_date: str) -> float:
@@ -84,6 +86,10 @@ def run(instrument_name: str, interval: int, expiry_date: str | None,
         min_move_pct=TREND_ALERT_MIN_MOVE_PCT,
         cooldown_minutes=TREND_ALERT_COOLDOWN_MINUTES,
     )
+
+    # Paper trader for tracking signal outcomes
+    paper_trader = PaperTrader()
+    print("Paper trading enabled — tracking all blast signal outcomes.")
 
     while True:
         try:
@@ -165,6 +171,12 @@ def run(instrument_name: str, interval: int, expiry_date: str | None,
                 expiry_date=expiry_date,
             )
 
+            # Update paper trader with current spot price
+            closed_trades = paper_trader.update_price(spot_price)
+            for ct in closed_trades:
+                result_icon = "\u2705" if ct.outcome == "target_hit" else "\u274c"
+                print(f"  {result_icon} Paper trade {ct.trade_id}: {ct.outcome} | P&L: {ct.pnl_pct:+.2f}%")
+
             if blast is not None:
                 fired_today += 1
                 last_blast_time = blast.timestamp
@@ -173,7 +185,22 @@ def run(instrument_name: str, interval: int, expiry_date: str | None,
                 print(f"  {dir_arrow} GAMMA BLAST: {blast.direction.upper()}")
                 print(f"  Score: {blast.composite_score:.0f}/100")
                 print(f"  Entry: {blast.entry_level:,.2f} | SL: {blast.stop_loss:,.2f} | Target: {blast.target:,.2f}")
+
+                # OI flow info
+                oi_flow = blast.metadata.get("oi_flow", {})
+                if oi_flow.get("dominant_flow") != "unavailable":
+                    print(f"  OI Flow: {oi_flow.get('dominant_flow', 'N/A')} (conf: {oi_flow.get('flow_confidence', 0):.0%})")
+
+                # Pattern match info
+                pm = blast.metadata.get("pattern_match", {})
+                if pm.get("matches", 0) > 0:
+                    print(f"  Historical: {pm['hit_rate']:.0%} hit rate from {pm['matches']} similar setups")
+
                 print(f"  {'='*50}")
+
+                # Open paper trade
+                paper_trade = paper_trader.open_trade(blast)
+                print(f"  >> Paper trade opened: {paper_trade.trade_id}")
 
                 if enable_telegram:
                     if send_blast_alert(blast):

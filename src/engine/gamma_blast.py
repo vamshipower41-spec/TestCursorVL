@@ -27,6 +27,16 @@ from src.engine.charm_vanna import (
     compute_vanna_exposure,
     compute_oi_change,
 )
+from src.engine.bs_greeks import (
+    compute_dealer_charm_flow as bs_charm_flow,
+    compute_dealer_vanna_flow as bs_vanna_flow,
+)
+from src.engine.oi_flow import classify_oi_flow, compute_adjusted_gex
+from src.engine.pattern_matcher import (
+    compute_pattern_features,
+    match_historical_patterns,
+    apply_pattern_adjustment,
+)
 from src.engine.blast_filters import apply_all_filters, classify_vix_regime
 from config.settings import (
     BLAST_MIN_SCORE,
@@ -132,11 +142,17 @@ def detect_gamma_blast(
     if direction:
         direction_votes[direction] += score * w
 
-    # 3. Charm Flow Accelerator
-    charm_data = compute_charm_flow(
-        chain_df, profile.spot_price, time_to_expiry_hours,
-        profile.contract_multiplier,
-    )
+    # 3. Charm Flow Accelerator (BS-derived when IV available, fallback to approx)
+    try:
+        charm_data = bs_charm_flow(
+            chain_df, profile.spot_price, time_to_expiry_hours,
+            profile.contract_multiplier,
+        )
+    except Exception:
+        charm_data = compute_charm_flow(
+            chain_df, profile.spot_price, time_to_expiry_hours,
+            profile.contract_multiplier,
+        )
     score, direction = _score_charm_flow(charm_data, time_to_expiry_hours)
     w = active_weights["charm_flow"]
     components.append(BlastComponent(
@@ -175,10 +191,16 @@ def detect_gamma_blast(
     if direction:
         direction_votes[direction] += score * w
 
-    # 6. Vanna Squeeze
-    vanna_data = compute_vanna_exposure(
-        chain_df, prev_chain_df, profile.spot_price, profile.contract_multiplier,
-    )
+    # 6. Vanna Squeeze (BS-derived when IV available, fallback to approx)
+    try:
+        vanna_data = bs_vanna_flow(
+            chain_df, prev_chain_df, profile.spot_price, time_to_expiry_hours,
+            profile.contract_multiplier,
+        )
+    except Exception:
+        vanna_data = compute_vanna_exposure(
+            chain_df, prev_chain_df, profile.spot_price, profile.contract_multiplier,
+        )
     score, direction = _score_vanna_squeeze(vanna_data)
     w = active_weights["vanna_squeeze"]
     components.append(BlastComponent(
@@ -194,6 +216,14 @@ def detect_gamma_blast(
     # Compute OI change for confirmation (enrichment, not a scored model)
     oi_data = compute_oi_change(chain_df, prev_chain_df, profile.spot_price)
 
+    # --- OI Flow Direction (bought/sold estimation) ---
+    oi_flow_data = None
+    if prev_chain_df is not None:
+        try:
+            oi_flow_data = classify_oi_flow(chain_df, prev_chain_df, profile.spot_price)
+        except Exception:
+            pass  # Non-critical — fall back to naive GEX
+
     # Compute raw composite score
     composite = sum(c.score * c.weight for c in components)
 
@@ -202,6 +232,12 @@ def detect_gamma_blast(
         composite = min(composite + oi_data["oi_intensity"] * 0.05, 100.0)
     elif oi_data["oi_intensity"] > 30 and oi_data["net_oi_change"] < 0:
         composite = max(composite - oi_data["oi_intensity"] * 0.05, 0.0)
+
+    # --- OI Flow Direction Boost/Penalty ---
+    # If flow estimation has high confidence, use it to confirm/deny direction
+    if oi_flow_data and oi_flow_data["flow_confidence"] > 0.5:
+        dominant_flow = oi_flow_data["dominant_flow"]
+        # Will be compared against blast_direction after direction is determined
 
     # --- Model Confluence Boost (AI Architect) ---
     # Gamma dynamics are NON-LINEAR: when multiple models fire together,
@@ -235,6 +271,31 @@ def detect_gamma_blast(
         return None
 
     blast_direction = "bullish" if bull_total > bear_total else "bearish"
+
+    # --- OI Flow Direction Confirmation ---
+    if oi_flow_data and oi_flow_data["flow_confidence"] > 0.5:
+        if oi_flow_data["dominant_flow"] == blast_direction:
+            # OI flow confirms blast direction — boost
+            composite = min(composite + 5.0 * oi_flow_data["flow_confidence"], 100.0)
+        elif oi_flow_data["dominant_flow"] != "neutral":
+            # OI flow contradicts — penalize
+            composite = max(composite - 8.0 * oi_flow_data["flow_confidence"], 0.0)
+
+    # --- Historical Pattern Matching ---
+    trend_data_for_pattern = {"trend": "neutral"}
+    if price_history and len(price_history) >= 3:
+        from src.engine.blast_filters import compute_trend_bias
+        trend_data_for_pattern = compute_trend_bias(price_history)
+
+    try:
+        pattern_features = compute_pattern_features(
+            profile, vix_value, time_to_expiry_hours,
+            trend_data_for_pattern.get("trend", "neutral"), blast_direction,
+        )
+        pattern_result = match_historical_patterns(pattern_features)
+        composite = apply_pattern_adjustment(composite, pattern_result)
+    except Exception:
+        pattern_result = None  # Non-critical — skip if no history yet
 
     # Apply 10 quality filters (trend, VIX, volume, timing, expiry type,
     # liquidity, max pain, PCR, IV skew, volume-direction) — separates 5/10 from 9/10
@@ -309,6 +370,18 @@ def detect_gamma_blast(
                 "neg_gamma_wall_interaction": neg_gamma_score >= 50 and wall_breach_score >= 50,
             },
             "direction_margin": round(vote_margin, 3),
+            "oi_flow": {
+                "dominant_flow": oi_flow_data["dominant_flow"] if oi_flow_data else "unavailable",
+                "flow_confidence": oi_flow_data["flow_confidence"] if oi_flow_data else 0,
+                "net_dealer_delta": oi_flow_data["net_dealer_delta"] if oi_flow_data else 0,
+            },
+            "pattern_match": {
+                "hit_rate": pattern_result.conditional_hit_rate if pattern_result else 0,
+                "matches": pattern_result.total_matches if pattern_result else 0,
+                "recommendation": pattern_result.recommendation if pattern_result else "no_data",
+                "confidence": pattern_result.confidence if pattern_result else 0,
+            },
+            "expiry_date": expiry_date,
         },
     )
 
