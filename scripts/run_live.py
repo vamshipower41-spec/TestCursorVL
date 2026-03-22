@@ -40,6 +40,11 @@ from config.settings import (
     WS_TRIGGER_PROXIMITY_PCT,
     WS_MIN_TRIGGER_INTERVAL,
     WS_MAX_TRIGGER_INTERVAL,
+    PREPARE_ALERT_ENABLED,
+    PREPARE_ALERT_ZONE_PCT,
+    PREPARE_ALERT_MIN_CANDLES,
+    PREPARE_ALERT_COOLDOWN_MINUTES,
+    PREPARE_ALERT_MAX_PER_DAY,
 )
 from src.auth.upstox_auth import load_access_token, validate_token
 from src.data.options_chain import OptionsChainFetcher
@@ -53,6 +58,8 @@ from src.notifications.telegram import (
     send_blast_alert,
     DirectionalTracker,
     send_directional_alert,
+    PrepareAlertTracker,
+    send_prepare_alert,
     send_paper_trade_alert,
     send_daily_summary,
 )
@@ -91,7 +98,7 @@ def _fetch_and_process(
     fetcher, inst, instrument_name, expiry_date, token,
     prev_profile, prev_chain, price_history, fired_today,
     last_blast_time, vix_value, hist_store, dir_tracker,
-    paper_trader, enable_telegram,
+    paper_trader, enable_telegram, prepare_tracker=None,
 ):
     """Core processing: fetch chain, compute GEX, detect blasts, manage paper trades."""
 
@@ -238,6 +245,17 @@ def _fetch_and_process(
             else:
                 print("  >> Telegram send failed (check credentials)")
 
+    # --- Prepare Alert (early warning near key levels with momentum) ---
+    if enable_telegram and prepare_tracker is not None and PREPARE_ALERT_ENABLED:
+        prepare_msg = prepare_tracker.update(
+            spot_price=spot_price,
+            profile=profile,
+            instrument=instrument_name,
+        )
+        if prepare_msg is not None:
+            if send_prepare_alert(prepare_msg):
+                print(f"  >> Prepare alert sent to Telegram!")
+
     # --- Directional Trend Alert ---
     if enable_telegram:
         trend_data = compute_trend_bias(price_history)
@@ -293,6 +311,15 @@ def run(instrument_name: str, interval: int, expiry_date: str | None,
     paper_trader = PaperTrader()
     print("Paper trading enabled — tracking all blast signal outcomes.")
 
+    prepare_tracker = PrepareAlertTracker(
+        zone_pct=PREPARE_ALERT_ZONE_PCT,
+        min_candles=PREPARE_ALERT_MIN_CANDLES,
+        cooldown_minutes=PREPARE_ALERT_COOLDOWN_MINUTES,
+        max_alerts_per_day=PREPARE_ALERT_MAX_PER_DAY,
+    )
+    if enable_telegram and PREPARE_ALERT_ENABLED:
+        print("Prepare alerts: ENABLED (early warning near S/R with momentum)")
+
     # --- WebSocket Trigger Mode ---
     if use_websocket:
         trigger_event = threading.Event()
@@ -334,7 +361,7 @@ def run(instrument_name: str, interval: int, expiry_date: str | None,
                 fetcher, inst, instrument_name, expiry_date, token,
                 prev_profile, prev_chain, price_history, fired_today,
                 last_blast_time, vix_value, hist_store, dir_tracker,
-                paper_trader, enable_telegram,
+                paper_trader, enable_telegram, prepare_tracker,
             )
             prev_profile, prev_chain, price_history, fired_today, last_blast_time, vix_value = result
 

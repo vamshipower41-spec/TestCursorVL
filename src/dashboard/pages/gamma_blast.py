@@ -39,6 +39,11 @@ from config.settings import (
     TREND_ALERT_MIN_CONSECUTIVE,
     TREND_ALERT_MIN_MOVE_PCT,
     TREND_ALERT_COOLDOWN_MINUTES,
+    PREPARE_ALERT_ENABLED,
+    PREPARE_ALERT_ZONE_PCT,
+    PREPARE_ALERT_MIN_CANDLES,
+    PREPARE_ALERT_COOLDOWN_MINUTES,
+    PREPARE_ALERT_MAX_PER_DAY,
 )
 from config.settings import UPSTOX_BASE_URL
 from src.auth.upstox_auth import load_access_token
@@ -56,6 +61,8 @@ from src.notifications.telegram import (
     send_blast_alert,
     DirectionalTracker,
     send_directional_alert,
+    PrepareAlertTracker,
+    send_prepare_alert,
     get_last_send_error,
     validate_credentials,
 )
@@ -154,6 +161,13 @@ if "directional_tracker" not in st.session_state:
     )
 if "blast_alert_sent_ids" not in st.session_state:
     st.session_state.blast_alert_sent_ids = set()
+if "prepare_tracker" not in st.session_state:
+    st.session_state.prepare_tracker = PrepareAlertTracker(
+        zone_pct=PREPARE_ALERT_ZONE_PCT,
+        min_candles=PREPARE_ALERT_MIN_CANDLES,
+        cooldown_minutes=PREPARE_ALERT_COOLDOWN_MINUTES,
+        max_alerts_per_day=PREPARE_ALERT_MAX_PER_DAY,
+    )
 
 # Validate Telegram credentials once at startup
 if "telegram_validated" not in st.session_state:
@@ -276,6 +290,20 @@ if TELEGRAM_ENABLED:
         else:
             err = get_last_send_error()
             st.warning(f"Directional alert failed: {err or 'Check Telegram credentials.'}")
+
+# Prepare alert — early warning when price approaches key level with momentum
+if TELEGRAM_ENABLED and PREPARE_ALERT_ENABLED:
+    prepare_msg = st.session_state.prepare_tracker.update(
+        spot_price=spot_price,
+        profile=profile,
+        instrument=instrument_name,
+    )
+    if prepare_msg is not None:
+        if send_prepare_alert(prepare_msg):
+            st.toast("Prepare alert sent to Telegram!")
+        else:
+            err = get_last_send_error()
+            st.warning(f"Prepare alert failed: {err or 'Check Telegram credentials.'}")
 
 # =====================================================
 # PLAIN ENGLISH SUMMARY — so you don't have to compare numbers
