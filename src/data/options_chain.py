@@ -93,6 +93,12 @@ class OptionsChainFetcher:
         chain_df.sort_values("strike_price", inplace=True)
         chain_df.reset_index(drop=True, inplace=True)
 
+        if spot_price <= 0 and not chain_df.empty:
+            # Fallback: estimate spot from mid-point of ATM strikes
+            strikes = chain_df["strike_price"].values
+            if len(strikes) > 0:
+                spot_price = float(strikes[len(strikes) // 2])
+
         return chain_df, spot_price
 
     def get_nearest_expiry(self, instrument_key: str) -> str:

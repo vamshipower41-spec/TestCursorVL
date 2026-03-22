@@ -91,13 +91,55 @@ try:
     # --- Header ---
     st.subheader(f"{instrument_name} | Spot: {spot_price:,.2f} | Expiries: {num_expiries}")
 
-    # --- Expiry Contributions ---
-    st.subheader("Expiry Contributions")
-    for contrib in result["expiry_contributions"]:
-        c1, c2, c3 = st.columns(3)
-        c1.metric(f"Expiry: {contrib.expiry}", f"TTE: {contrib.tte_hours:.1f}h")
-        c2.metric("OI Weight", f"{contrib.oi_weight:.0%}")
-        c3.metric("Net GEX", f"{contrib.net_gex:,.0f}")
+    # --- Plain English Summary ---
+    st.subheader("What Does This Tell You?")
+
+    _sp_flip = single_profile.gamma_flip_level
+    _multi_flip = result.get("weighted_gamma_flip")
+    _r_calls = result.get("reinforced_call_walls", [])
+    _r_puts = result.get("reinforced_put_walls", [])
+    _tips = []
+
+    if _sp_flip and _multi_flip:
+        _diff = abs(_sp_flip - _multi_flip)
+        if _diff > 50:
+            _better = "Multi-Expiry" if abs(spot_price - _multi_flip) < abs(spot_price - _sp_flip) else "Single Expiry"
+            _tips.append(
+                f'&#128205; <b>Single-expiry flip ({_sp_flip:,.0f}) and multi-expiry flip ({_multi_flip:,.0f}) '
+                f'differ by {_diff:,.0f} pts.</b><br>'
+                f'<span style="color:#aaa;">The multi-expiry flip is more reliable — it sees the full picture.</span>'
+            )
+        else:
+            _tips.append(
+                f'&#9989; <b>Both single ({_sp_flip:,.0f}) and multi-expiry ({_multi_flip:,.0f}) '
+                f'flip levels agree!</b><br>'
+                f'<span style="color:#aaa;">This is a strong, reliable flip level. Trust it.</span>'
+            )
+
+    if _r_calls:
+        _tips.append(
+            f'&#128293; <b>{len(_r_calls)} Reinforced Call Wall(s) found — these are STRONG resistance levels</b><br>'
+            f'<span style="color:#aaa;">Same wall appears in 2+ expiries = much harder for price to break above.</span>'
+        )
+    if _r_puts:
+        _tips.append(
+            f'&#128170; <b>{len(_r_puts)} Reinforced Put Wall(s) found — these are STRONG support levels</b><br>'
+            f'<span style="color:#aaa;">Same wall appears in 2+ expiries = much harder for price to break below.</span>'
+        )
+    if not _r_calls and not _r_puts:
+        _tips.append(
+            '&#128993; <b>No reinforced walls found</b><br>'
+            '<span style="color:#aaa;">No strike appears as a wall in multiple expiries. '
+            'Walls from single-expiry analysis may be weaker than usual.</span>'
+        )
+
+    for tip in _tips:
+        st.markdown(
+            f'<div style="background:#1a1a2e; border-left:4px solid #4a90d9; '
+            f'border-radius:0 8px 8px 0; padding:12px 16px; margin:8px 0; line-height:1.6;">'
+            f'{tip}</div>',
+            unsafe_allow_html=True,
+        )
 
     # --- Key Levels Comparison ---
     st.subheader("Key Levels")
@@ -183,5 +225,7 @@ is more reliable because it captures the full dealer positioning.
         """)
 
 except Exception as e:
+    import traceback
     st.error(f"Error loading data: {e}")
+    st.code(traceback.format_exc())
     st.caption("Make sure your Upstox token is valid (check Settings page).")
