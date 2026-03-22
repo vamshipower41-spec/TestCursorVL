@@ -441,10 +441,16 @@ st.session_state.radar_prev_profile = profile
 st.session_state.radar_prev_chain = chain_df_filtered.copy()
 
 if blast is not None:
-    # BLAST DETECTED!
-    st.session_state.radar_fired_today += 1
-    st.session_state.radar_last_time = blast.timestamp
-    st.session_state.radar_blast_history.append(blast)
+    # BLAST DETECTED — deduplicate against re-renders
+    blast_id = f"{blast.instrument}_{blast.timestamp.isoformat()}"
+    existing_ids = {
+        f"{b.instrument}_{b.timestamp.isoformat()}"
+        for b in st.session_state.radar_blast_history
+    }
+    if blast_id not in existing_ids:
+        st.session_state.radar_fired_today += 1
+        st.session_state.radar_last_time = blast.timestamp
+        st.session_state.radar_blast_history.append(blast)
 
     # Telegram alert
     blast_id = f"{blast.instrument}_{blast.timestamp.isoformat()}"

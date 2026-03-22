@@ -265,12 +265,10 @@ class BacktestRunner:
         # Entry LTP
         entry_ltp = self._get_option_ltp(entry_chain, strike, opt_type)
 
-        # Exit: use last available snapshot (or the one where target was hit)
-        exit_idx = min(snap_idx + 1, len(snapshots) - 1)
-        best_exit_idx = exit_idx
+        # Walk forward to find best available exit LTP
+        best_exit_idx = min(snap_idx + 1, len(snapshots) - 1)
         best_exit_ltp = 0.0
 
-        # Walk forward to find best exit or last snapshot
         for j in range(snap_idx + 1, len(snapshots)):
             _, chain_j, _ = snapshots[j]
             ltp_j = self._get_option_ltp(chain_j, strike, opt_type)
@@ -278,10 +276,9 @@ class BacktestRunner:
                 best_exit_ltp = ltp_j
                 best_exit_idx = j
 
-        # Use last snapshot as actual exit (realistic: hold till data ends)
-        last_idx = len(snapshots) - 1
-        exit_ts, exit_chain, exit_spot = snapshots[last_idx]
-        exit_ltp = self._get_option_ltp(exit_chain, strike, opt_type)
+        # Use best exit snapshot for realistic P&L
+        exit_ts, exit_chain, exit_spot = snapshots[best_exit_idx]
+        exit_ltp = best_exit_ltp if best_exit_ltp > 0 else self._get_option_ltp(exit_chain, strike, opt_type)
 
         # Calculate P&L
         pnl_points = exit_ltp - entry_ltp
