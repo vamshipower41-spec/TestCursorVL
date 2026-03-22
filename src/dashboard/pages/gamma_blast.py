@@ -277,6 +277,120 @@ if TELEGRAM_ENABLED:
             err = get_last_send_error()
             st.warning(f"Directional alert failed: {err or 'Check Telegram credentials.'}")
 
+# =====================================================
+# PLAIN ENGLISH SUMMARY — so you don't have to compare numbers
+# =====================================================
+st.markdown("---")
+st.markdown("### What's Happening Right Now?")
+
+_summary_points = []
+_summary_color = "#26a69a"
+
+# 1. Spot vs Gamma Flip (the most important comparison)
+if profile.gamma_flip_level:
+    _flip = profile.gamma_flip_level
+    _diff = spot_price - _flip
+    if _diff > 0:
+        _summary_points.append(
+            f'&#128994; <b>Spot ({spot_price:,.0f}) is ABOVE Gamma Flip ({_flip:,.0f}) by {_diff:,.0f} pts</b><br>'
+            f'<span style="color:#aaa;">Market is in STABLE zone — dealers are cushioning moves. '
+            f'Price tends to stay in a range. Good for selling options.</span>'
+        )
+    else:
+        _summary_color = "#ef5350"
+        _summary_points.append(
+            f'&#128308; <b>Spot ({spot_price:,.0f}) is BELOW Gamma Flip ({_flip:,.0f}) by {abs(_diff):,.0f} pts</b><br>'
+            f'<span style="color:#aaa;">Market is in VOLATILE zone — moves get amplified! '
+            f'Dealers are adding fuel to the fire. Be careful, big swings possible.</span>'
+        )
+else:
+    _summary_points.append(
+        '&#128993; <b>Gamma Flip level not available</b><br>'
+        '<span style="color:#aaa;">Cannot determine market regime right now.</span>'
+    )
+
+# 2. Where is price relative to walls?
+if profile.call_wall and profile.put_wall:
+    _cw = profile.call_wall
+    _pw = profile.put_wall
+    _range = _cw - _pw
+    _dist_to_ceiling = _cw - spot_price
+    _dist_to_floor = spot_price - _pw
+
+    if _range > 0 and _dist_to_ceiling < _range * 0.15:
+        _summary_points.append(
+            f'&#9888; <b>Price is VERY CLOSE to Ceiling ({_cw:,.0f}) — only {_dist_to_ceiling:,.0f} pts away!</b><br>'
+            f'<span style="color:#aaa;">Price may bounce down from here. '
+            f'OR if it breaks above → fast move UP expected.</span>'
+        )
+    elif _range > 0 and _dist_to_floor < _range * 0.15:
+        _summary_points.append(
+            f'&#9888; <b>Price is VERY CLOSE to Floor ({_pw:,.0f}) — only {_dist_to_floor:,.0f} pts away!</b><br>'
+            f'<span style="color:#aaa;">Price may bounce up from here. '
+            f'OR if it breaks below → fast move DOWN expected.</span>'
+        )
+    else:
+        _summary_points.append(
+            f'&#128205; <b>Price is between Floor ({_pw:,.0f}) and Ceiling ({_cw:,.0f})</b><br>'
+            f'<span style="color:#aaa;">{_dist_to_floor:,.0f} pts above floor, '
+            f'{_dist_to_ceiling:,.0f} pts below ceiling. '
+            f'Price is in the middle — no immediate wall pressure.</span>'
+        )
+
+# 3. VIX summary
+if vix_val:
+    if vix_val < 14:
+        _summary_points.append(
+            f'&#128154; <b>VIX is LOW ({vix_val:.1f}) — Market is calm</b><br>'
+            f'<span style="color:#aaa;">Small moves expected. Less chance of a Gamma Blast.</span>'
+        )
+    elif vix_val < 18:
+        _summary_points.append(
+            f'&#128154; <b>VIX is NORMAL ({vix_val:.1f})</b><br>'
+            f'<span style="color:#aaa;">Nothing unusual. Normal market conditions.</span>'
+        )
+    elif vix_val < 22:
+        _summary_points.append(
+            f'&#128992; <b>VIX is HIGH ({vix_val:.1f}) — Market is nervous</b><br>'
+            f'<span style="color:#aaa;">Bigger swings expected. Gamma Blast signals more likely.</span>'
+        )
+    else:
+        _summary_points.append(
+            f'&#128308; <b>VIX is EXTREME ({vix_val:.1f}) — Market is very scared!</b><br>'
+            f'<span style="color:#aaa;">Wild moves possible. Be very careful with positions.</span>'
+        )
+
+# 4. Expiry time
+if is_expiry:
+    if tte < 2:
+        _summary_points.append(
+            f'&#9200; <b>Only {tte:.1f} hours left to expiry!</b><br>'
+            f'<span style="color:#aaa;">Last stretch — options are dying fast. '
+            f'This is when Gamma Blasts are most likely. Stay alert!</span>'
+        )
+    elif tte < 4:
+        _summary_points.append(
+            f'&#9200; <b>{tte:.1f} hours to expiry — Charm zone approaching</b><br>'
+            f'<span style="color:#aaa;">After 1:30 PM, options decay accelerates. '
+            f'Watch for signals in the next few hours.</span>'
+        )
+    else:
+        _summary_points.append(
+            f'&#9200; <b>{tte:.1f} hours to expiry</b><br>'
+            f'<span style="color:#aaa;">Still early in the day. Best signals usually come after lunch.</span>'
+        )
+
+# Render summary box
+_summary_html = ""
+for pt in _summary_points:
+    _summary_html += (
+        f'<div style="background:#1a1a2e; border-left:4px solid {_summary_color}; '
+        f'border-radius:0 8px 8px 0; padding:12px 16px; margin:8px 0; line-height:1.6;">'
+        f'{pt}</div>'
+    )
+
+st.markdown(_summary_html, unsafe_allow_html=True)
+
 st.markdown("---")
 
 # Run gamma blast detection with all filters
