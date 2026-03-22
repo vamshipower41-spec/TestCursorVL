@@ -42,7 +42,7 @@ from config.settings import (
     WS_MAX_TRIGGER_INTERVAL,
     PREPARE_ALERT_ENABLED,
     PREPARE_ALERT_ZONE_PCT,
-    PREPARE_ALERT_MIN_CANDLES,
+    PREPARE_ALERT_MIN_WARMUP_SCORE,
     PREPARE_ALERT_COOLDOWN_MINUTES,
     PREPARE_ALERT_MAX_PER_DAY,
 )
@@ -51,7 +51,7 @@ from src.data.options_chain import OptionsChainFetcher
 from src.engine.gex_calculator import build_gex_profile
 from src.engine.greeks import validate_greeks, filter_active_strikes
 from src.engine.signal_generator import generate_signals
-from src.engine.gamma_blast import detect_gamma_blast
+from src.engine.gamma_blast import detect_gamma_blast, compute_blast_readiness
 from src.engine.blast_filters import compute_trend_bias
 from src.engine.multi_expiry_gex import aggregate_multi_expiry_gex
 from src.notifications.telegram import (
@@ -245,12 +245,21 @@ def _fetch_and_process(
             else:
                 print("  >> Telegram send failed (check credentials)")
 
-    # --- Prepare Alert (early warning near key levels with momentum) ---
+    # --- Prepare Alert (early warning: zone + models warming up) ---
     if enable_telegram and prepare_tracker is not None and PREPARE_ALERT_ENABLED:
+        readiness = compute_blast_readiness(
+            profile=profile,
+            prev_profile=prev_profile,
+            chain_df=chain_df,
+            prev_chain_df=prev_chain,
+            time_to_expiry_hours=tte,
+            vix_value=vix_value,
+        )
         prepare_msg = prepare_tracker.update(
             spot_price=spot_price,
             profile=profile,
             instrument=instrument_name,
+            readiness=readiness,
         )
         if prepare_msg is not None:
             if send_prepare_alert(prepare_msg):
@@ -313,7 +322,7 @@ def run(instrument_name: str, interval: int, expiry_date: str | None,
 
     prepare_tracker = PrepareAlertTracker(
         zone_pct=PREPARE_ALERT_ZONE_PCT,
-        min_candles=PREPARE_ALERT_MIN_CANDLES,
+        min_warmup_score=PREPARE_ALERT_MIN_WARMUP_SCORE,
         cooldown_minutes=PREPARE_ALERT_COOLDOWN_MINUTES,
         max_alerts_per_day=PREPARE_ALERT_MAX_PER_DAY,
     )

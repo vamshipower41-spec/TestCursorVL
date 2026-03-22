@@ -99,8 +99,8 @@ PREPARE_ALERT_ENABLED = True
 # Zone proximity: how close price must be to a key level (%) to trigger zone alert
 PREPARE_ALERT_ZONE_PCT = 0.004  # 0.4% — e.g., within ~100 pts of a wall at NIFTY 24500
 
-# Consecutive same-direction candles required to confirm momentum near S/R
-PREPARE_ALERT_MIN_CANDLES = 2  # 2-3 consecutive red or green candles
+# Minimum blast warmup score to trigger prepare alert (models building, not yet fired)
+PREPARE_ALERT_MIN_WARMUP_SCORE = 40  # Score 40-69 = warming up, 70+ = blast fires
 
 # Cooldown between prepare alerts for the same zone (minutes)
 PREPARE_ALERT_COOLDOWN_MINUTES = 10
