@@ -6,3 +6,8 @@ textColor = "#fafafa"
 
 [server]
 headless = true
+enableWebsocketCompression = false
+runOnSave = true
+
+[runner]
+fastReruns = true
