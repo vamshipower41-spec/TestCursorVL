@@ -91,6 +91,23 @@ WS_MIN_TRIGGER_INTERVAL = 30  # Min seconds between triggered chain fetches
 WS_MAX_TRIGGER_INTERVAL = 120  # Max seconds between periodic fetches (fallback)
 WS_VELOCITY_THRESHOLD = 5.0  # Points/sec for velocity-based trigger
 
+# --- Prepare Alert Settings (early warning before blast) ---
+
+# Enable/disable prepare alerts (Telegram heads-up before a trade)
+PREPARE_ALERT_ENABLED = True
+
+# Zone proximity: how close price must be to a key level (%) to trigger zone alert
+PREPARE_ALERT_ZONE_PCT = 0.004  # 0.4% — e.g., within ~100 pts of a wall at NIFTY 24500
+
+# Consecutive same-direction candles required to confirm momentum near S/R
+PREPARE_ALERT_MIN_CANDLES = 2  # 2-3 consecutive red or green candles
+
+# Cooldown between prepare alerts for the same zone (minutes)
+PREPARE_ALERT_COOLDOWN_MINUTES = 10
+
+# Maximum prepare alerts per day (avoid alert fatigue)
+PREPARE_ALERT_MAX_PER_DAY = 8
+
 # --- Paper Trade Settings ---
 PAPER_TRADE_DIR = "data/paper_trades"
 PAPER_TRADE_TELEGRAM_ALERTS = True  # Send outcome alerts to Telegram

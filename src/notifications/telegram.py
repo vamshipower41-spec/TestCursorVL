@@ -22,7 +22,7 @@ from datetime import datetime
 
 import requests
 
-from src.data.models import GammaBlast
+from src.data.models import GammaBlast, GEXProfile
 
 logger = logging.getLogger(__name__)
 
@@ -327,6 +327,285 @@ class DirectionalTracker:
 
 def send_directional_alert(message: str) -> bool:
     """Send a directional trend alert to Telegram."""
+    return send_telegram(message)
+
+
+# ---------------------------------------------------------------------------
+# Prepare Alert — early warning when price approaches blast zone with momentum
+# ---------------------------------------------------------------------------
+
+class PrepareAlertTracker:
+    """Detects when price approaches key gamma levels with consecutive momentum candles.
+
+    Sends a Telegram "PREPARE" alert when:
+    1. Price enters a zone near a key level (gamma wall, gamma flip, max gamma pin)
+    2. There are 2-3 consecutive same-direction price moves (candles) confirming momentum
+    3. Direction suggests whether to prepare for CALL or PUT
+
+    This gives the trader a heads-up ~5 minutes BEFORE a full blast signal fires.
+
+    Real-world observation: blasts don't happen at exact levels — they happen in
+    zones (e.g., 24500-24560), and 2-3 consecutive candles confirm the move is real.
+    """
+
+    def __init__(
+        self,
+        zone_pct: float = 0.004,
+        min_candles: int = 2,
+        cooldown_minutes: int = 10,
+        max_alerts_per_day: int = 8,
+    ):
+        self._zone_pct = zone_pct
+        self._min_candles = min_candles
+        self._cooldown_minutes = cooldown_minutes
+        self._max_alerts_per_day = max_alerts_per_day
+        self._price_readings: list[dict] = []
+        self._alerts_today: int = 0
+        self._last_alert_time: datetime | None = None
+        self._last_alert_zone: str | None = None  # e.g., "call_wall_24500"
+        self._last_reset_date: str | None = None
+
+    def update(
+        self,
+        spot_price: float,
+        profile: GEXProfile,
+        instrument: str,
+        timestamp: datetime | None = None,
+    ) -> str | None:
+        """Feed a new price reading. Returns Telegram alert message if prepare alert triggered.
+
+        Args:
+            spot_price: Current spot price
+            profile: Current GEX profile with walls, gamma flip, etc.
+            instrument: "NIFTY" or "SENSEX"
+            timestamp: Current timestamp (defaults to now)
+
+        Returns:
+            Formatted Telegram message if alert triggered, None otherwise.
+        """
+        if timestamp is None:
+            from src.utils.ist import now_ist
+            timestamp = now_ist()
+
+        # Reset daily counters
+        today_str = timestamp.strftime("%Y-%m-%d")
+        if self._last_reset_date != today_str:
+            self._alerts_today = 0
+            self._last_alert_time = None
+            self._last_alert_zone = None
+            self._last_reset_date = today_str
+
+        # Daily cap
+        if self._alerts_today >= self._max_alerts_per_day:
+            return None
+
+        # Record price reading
+        self._price_readings.append({
+            "price": spot_price,
+            "time": timestamp,
+        })
+        if len(self._price_readings) > 30:
+            self._price_readings = self._price_readings[-30:]
+
+        # Need at least min_candles + 1 readings to detect consecutive moves
+        if len(self._price_readings) < self._min_candles + 1:
+            return None
+
+        # Detect consecutive same-direction candles
+        recent = self._price_readings[-(self._min_candles + 1):]
+        moves = []
+        for i in range(1, len(recent)):
+            diff = recent[i]["price"] - recent[i - 1]["price"]
+            if diff > 0:
+                moves.append("green")
+            elif diff < 0:
+                moves.append("red")
+            else:
+                moves.append("flat")
+
+        # Check if last N candles are all the same color
+        candle_colors = moves[-self._min_candles:]
+        if not candle_colors:
+            return None
+
+        all_green = all(c == "green" for c in candle_colors)
+        all_red = all(c == "red" for c in candle_colors)
+
+        if not all_green and not all_red:
+            return None  # No consecutive momentum
+
+        momentum_direction = "bullish" if all_green else "bearish"
+
+        # Build key levels to check
+        key_levels = self._get_key_levels(profile)
+
+        # Check if price is in zone of any key level
+        for level_name, level_price, level_type in key_levels:
+            if level_price is None or level_price <= 0:
+                continue
+
+            distance_pct = abs(spot_price - level_price) / spot_price
+
+            if distance_pct > self._zone_pct:
+                continue  # Not in zone
+
+            # Price is in zone of this level with consecutive candles
+            zone_id = f"{level_name}_{level_price:.0f}"
+
+            # Cooldown check (same zone)
+            if self._last_alert_time is not None:
+                elapsed = (timestamp - self._last_alert_time).total_seconds() / 60
+                if elapsed < self._cooldown_minutes and self._last_alert_zone == zone_id:
+                    continue  # Same zone, still in cooldown
+
+            # Determine trade suggestion
+            trade_action = self._suggest_trade(
+                momentum_direction, level_type, spot_price, level_price,
+            )
+
+            if trade_action is None:
+                continue  # No clear trade suggestion for this setup
+
+            # Calculate total move across the consecutive candles
+            start_price = recent[-(self._min_candles + 1)]["price"]
+            total_move = spot_price - start_price
+            total_move_pct = total_move / start_price
+
+            # Fire alert
+            self._alerts_today += 1
+            self._last_alert_time = timestamp
+            self._last_alert_zone = zone_id
+
+            return self._format_prepare_alert(
+                instrument=instrument,
+                trade_action=trade_action,
+                momentum_direction=momentum_direction,
+                spot_price=spot_price,
+                level_name=level_name,
+                level_price=level_price,
+                distance_pct=distance_pct,
+                candle_count=len(candle_colors),
+                total_move=total_move,
+                total_move_pct=total_move_pct,
+                timestamp=timestamp,
+            )
+
+        return None
+
+    @staticmethod
+    def _get_key_levels(profile: GEXProfile) -> list[tuple[str, float | None, str]]:
+        """Extract key levels from GEX profile.
+
+        Returns list of (name, price, type) where type is 'resistance' or 'support'.
+        """
+        levels = []
+
+        if profile.call_wall is not None:
+            levels.append(("Call Wall", profile.call_wall, "resistance"))
+        if profile.put_wall is not None:
+            levels.append(("Put Wall", profile.put_wall, "support"))
+        if profile.gamma_flip_level is not None:
+            levels.append(("Gamma Flip", profile.gamma_flip_level, "pivot"))
+        if profile.max_gamma_strike is not None:
+            levels.append(("Max Gamma Pin", profile.max_gamma_strike, "pin"))
+
+        # Zero GEX levels are transition zones
+        for i, zgl in enumerate(profile.zero_gex_levels or []):
+            levels.append((f"Zero GEX #{i+1}", zgl, "pivot"))
+
+        return levels
+
+    @staticmethod
+    def _suggest_trade(
+        momentum_dir: str,
+        level_type: str,
+        spot: float,
+        level_price: float,
+    ) -> str | None:
+        """Suggest CALL or PUT based on momentum + level type.
+
+        Returns "CALL", "PUT", or None if no clear trade.
+        """
+        approaching_from_below = spot < level_price
+        approaching_from_above = spot > level_price
+
+        if level_type == "resistance":
+            # Near resistance (call wall)
+            if momentum_dir == "bullish" and approaching_from_below:
+                # Approaching resistance with bullish momentum → might break above
+                return "CALL"
+            if momentum_dir == "bearish" and not approaching_from_below:
+                # Rejected from resistance, falling → PUT
+                return "PUT"
+
+        elif level_type == "support":
+            # Near support (put wall)
+            if momentum_dir == "bearish" and approaching_from_above:
+                # Approaching support with bearish momentum → might break below
+                return "PUT"
+            if momentum_dir == "bullish" and not approaching_from_above:
+                # Bouncing from support → CALL
+                return "CALL"
+
+        elif level_type in ("pivot", "pin"):
+            # Near gamma flip or max gamma pin — direction of momentum matters
+            if momentum_dir == "bullish":
+                return "CALL"
+            elif momentum_dir == "bearish":
+                return "PUT"
+
+        return None
+
+    @staticmethod
+    def _format_prepare_alert(
+        instrument: str,
+        trade_action: str,
+        momentum_direction: str,
+        spot_price: float,
+        level_name: str,
+        level_price: float,
+        distance_pct: float,
+        candle_count: int,
+        total_move: float,
+        total_move_pct: float,
+        timestamp: datetime,
+    ) -> str:
+        """Format the prepare alert message for Telegram."""
+        if trade_action == "CALL":
+            icon = "\u26a1\U0001F7E2"  # ⚡🟢
+            action_text = "PREPARE — BUY CALL"
+        else:
+            icon = "\u26a1\U0001F534"  # ⚡🔴
+            action_text = "PREPARE — BUY PUT"
+
+        candle_emoji = "\U0001F7E9" * candle_count if momentum_direction == "bullish" else "\U0001F7E5" * candle_count
+
+        # Zone description
+        if spot_price > level_price:
+            pos_text = f"{abs(spot_price - level_price):,.0f} pts ABOVE"
+        else:
+            pos_text = f"{abs(level_price - spot_price):,.0f} pts BELOW"
+
+        msg = (
+            f"{icon} <b>{action_text} — {instrument}</b>\n"
+            f"\n"
+            f"<b>Signal:</b> {candle_count} consecutive {'green' if momentum_direction == 'bullish' else 'red'} "
+            f"candles near {level_name}\n"
+            f"{candle_emoji} Move: {total_move:+,.0f} pts ({total_move_pct:+.2%})\n"
+            f"\n"
+            f"<b>Zone:</b>\n"
+            f"  Spot  : {spot_price:,.2f}\n"
+            f"  {level_name}: {level_price:,.0f} ({pos_text})\n"
+            f"  Distance: {distance_pct:.2%}\n"
+            f"\n"
+            f"<i>Next 5 min trade setup building. Watch for blast confirmation.</i>\n"
+            f"<i>{timestamp:%H:%M IST}</i>"
+        )
+        return msg
+
+
+def send_prepare_alert(message: str) -> bool:
+    """Send a prepare alert to Telegram."""
     return send_telegram(message)
 
 
