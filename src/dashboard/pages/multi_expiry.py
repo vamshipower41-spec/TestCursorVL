@@ -93,11 +93,15 @@ try:
 
     # --- Expiry Contributions ---
     st.subheader("Expiry Contributions")
-    for contrib in result["expiry_contributions"]:
+    for contrib in result.get("expiry_contributions", []):
         c1, c2, c3 = st.columns(3)
-        c1.metric(f"Expiry: {contrib.expiry_date}", f"OI: {contrib.total_oi:,}")
-        c2.metric("OI Weight", f"{contrib.oi_weight:.0%}")
-        c3.metric("Net GEX", f"{contrib.net_gex:,.0f}")
+        exp_label = getattr(contrib, "expiry_date", None) or getattr(contrib, "expiry", "N/A")
+        total_oi = getattr(contrib, "total_oi", 0)
+        oi_weight = getattr(contrib, "oi_weight", 0)
+        net_gex = getattr(contrib, "net_gex", 0)
+        c1.metric(f"Expiry: {exp_label}", f"OI: {total_oi:,}")
+        c2.metric("OI Weight", f"{oi_weight:.0%}")
+        c3.metric("Net GEX", f"{net_gex:,.0f}")
 
     # --- Key Levels Comparison ---
     st.subheader("Key Levels")
