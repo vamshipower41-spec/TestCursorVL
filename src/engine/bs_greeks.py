@@ -335,7 +335,7 @@ def compute_dealer_vanna_flow(
     call_vanna = float(merged["call_vanna_flow"].sum()) * contract_multiplier
     put_vanna = float(merged["put_vanna_flow"].sum()) * contract_multiplier
 
-    net_vanna = call_vanna - put_vanna
+    net_vanna = call_vanna + put_vanna
 
     avg_iv_change = float(
         (merged["call_iv_change"].mean() + merged["put_iv_change"].mean()) / 2

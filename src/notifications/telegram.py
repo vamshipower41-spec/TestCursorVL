@@ -381,10 +381,10 @@ def format_daily_summary(stats: dict, instrument: str) -> str:
 
     hit_rate = stats.get("hit_rate", 0)
     avg_pnl = stats.get("avg_pnl_pct", 0)
-    best = stats.get("best_trade_pnl", 0)
-    worst = stats.get("worst_trade_pnl", 0)
+    best = stats.get("best_trade_pct", 0)
+    worst = stats.get("worst_trade_pct", 0)
     profit_factor = stats.get("profit_factor", 0)
-    win_streak = stats.get("max_win_streak", 0)
+    win_streak = stats.get("max_consecutive_wins", 0)
 
     perf_icon = "\U0001F4C8" if avg_pnl > 0 else "\U0001F4C9"  # 📈 / 📉
 

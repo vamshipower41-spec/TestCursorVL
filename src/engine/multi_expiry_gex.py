@@ -143,8 +143,10 @@ def aggregate_multi_expiry_gex(
     contributions = []
     for ep in expiry_profiles:
         net = float(ep["gex_df"]["net_gex"].sum()) * ep["oi_weight"]
-        cw = ep["walls"]["call_walls"][0]["strike"] if ep["walls"]["call_walls"] else None
-        pw = ep["walls"]["put_walls"][0]["strike"] if ep["walls"]["put_walls"] else None
+        cw_list = ep["walls"].get("call_walls", [])
+        pw_list = ep["walls"].get("put_walls", [])
+        cw = cw_list[0]["strike"] if cw_list else None
+        pw = pw_list[0]["strike"] if pw_list else None
         contributions.append(ExpiryContribution(
             expiry_date=ep["expiry_date"],
             total_oi=ep["total_oi"],

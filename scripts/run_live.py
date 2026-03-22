@@ -345,7 +345,7 @@ def run(instrument_name: str, interval: int, expiry_date: str | None,
                     call_wall=prev_profile.call_wall,
                     put_wall=prev_profile.put_wall,
                     zero_gex_levels=prev_profile.zero_gex_levels or [],
-                    max_gamma_strike=prev_profile.max_gamma_strike,
+                    max_gamma=prev_profile.max_gamma_strike,
                 ))
 
         except KeyboardInterrupt:
