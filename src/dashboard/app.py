@@ -17,6 +17,8 @@ from src.auth.upstox_auth import (
     get_login_url,
     exchange_code_for_token,
     validate_token,
+    _load_token_from_file,
+    _save_token_to_file,
 )
 
 st.set_page_config(
@@ -103,14 +105,17 @@ def _get_redirect_uri() -> str:
 
 def _handle_oauth():
     """Handle the Upstox OAuth flow. Returns True if authenticated."""
-    # Already authenticated this session
+    # 1. Already authenticated this session
     if st.session_state.get("upstox_access_token"):
-        if validate_token(st.session_state["upstox_access_token"]):
-            return True
-        # Token expired, clear it
-        del st.session_state["upstox_access_token"]
+        return True
 
-    # Check for auth code in URL (redirect from Upstox)
+    # 2. Check persistent token file (saved from earlier today)
+    saved_token = _load_token_from_file()
+    if saved_token:
+        st.session_state["upstox_access_token"] = saved_token
+        return True
+
+    # 3. Check for auth code in URL (redirect from Upstox)
     query_params = st.query_params
     auth_code = query_params.get("code")
 
@@ -123,6 +128,7 @@ def _handle_oauth():
                 auth_code, api_key, api_secret, redirect_uri
             )
             st.session_state["upstox_access_token"] = token
+            _save_token_to_file(token)
             st.query_params.clear()
             st.rerun()
         except Exception as e:
