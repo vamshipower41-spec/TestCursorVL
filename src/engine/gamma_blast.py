@@ -197,19 +197,42 @@ def detect_gamma_blast(
 
     # OI buildup near ATM boosts confidence; unwinding penalizes
     if oi_data["oi_intensity"] > 30 and oi_data["net_oi_change"] > 0:
-        # Fresh OI buildup = more gamma fuel, boost up to +5 pts
         composite = min(composite + oi_data["oi_intensity"] * 0.05, 100.0)
     elif oi_data["oi_intensity"] > 30 and oi_data["net_oi_change"] < 0:
-        # OI unwinding = gamma dissipating, penalize up to -5 pts
         composite = max(composite - oi_data["oi_intensity"] * 0.05, 0.0)
 
-    # Determine direction
+    # --- Model Confluence Boost (AI Architect) ---
+    # Gamma dynamics are NON-LINEAR: when multiple models fire together,
+    # the real effect is multiplicative, not additive.
+    # e.g., negative gamma squeeze + wall breach = explosive cascade.
+    firing_models = [c for c in components if c.score >= 40]
+    if len(firing_models) >= 3:
+        # 3+ models agree → strong confluence, boost up to +8 pts
+        confluence_boost = min((len(firing_models) - 2) * 4.0, 8.0)
+        composite = min(composite + confluence_boost, 100.0)
+    # Special interaction: negative gamma + wall breach is multiplicative
+    neg_gamma_score = next((c.score for c in components if c.model_name == "negative_gamma_squeeze"), 0)
+    wall_breach_score = next((c.score for c in components if c.model_name == "gamma_wall_breach"), 0)
+    if neg_gamma_score >= 50 and wall_breach_score >= 50:
+        # Both firing strongly → dealer hedging amplifies through the wall
+        interaction_boost = min((neg_gamma_score + wall_breach_score) * 0.05, 7.0)
+        composite = min(composite + interaction_boost, 100.0)
+
+    # --- Direction Conviction Margin (ML Engineer) ---
+    # Require meaningful gap between bull/bear votes to avoid ambiguous signals
     if direction_votes["bullish"] == 0 and direction_votes["bearish"] == 0:
         return None
-    blast_direction = (
-        "bullish" if direction_votes["bullish"] >= direction_votes["bearish"]
-        else "bearish"
-    )
+
+    bull_total = direction_votes["bullish"]
+    bear_total = direction_votes["bearish"]
+    vote_total = bull_total + bear_total
+    vote_margin = abs(bull_total - bear_total) / max(vote_total, 1.0)
+
+    if vote_margin < 0.15:
+        # Less than 15% margin — direction is ambiguous, suppress
+        return None
+
+    blast_direction = "bullish" if bull_total > bear_total else "bearish"
 
     # Apply 7 quality filters (trend, VIX, volume, timing, expiry type,
     # liquidity, max pain) — this is what separates 5/10 from 9/10
@@ -229,8 +252,18 @@ def detect_gamma_blast(
     if filtered_score < BLAST_MIN_SCORE:
         return None
 
-    # Compute entry/SL/target
-    entry, sl, target = _compute_levels(profile, blast_direction)
+    # Compute entry/SL/target (dynamic by VIX regime)
+    entry, sl, target = _compute_levels(profile, blast_direction, vix_value)
+
+    # --- R:R Quality Gate (AI Strategist) ---
+    # Suppress signals with poor risk-reward ratio
+    risk = abs(entry - sl)
+    reward = abs(target - entry)
+    if risk > 0:
+        rr_ratio = reward / risk
+        if rr_ratio < 1.0:
+            # R:R below 1:1 — not worth the trade, suppress
+            return None
 
     return GammaBlast(
         timestamp=profile.timestamp,
@@ -262,6 +295,11 @@ def detect_gamma_blast(
                 "oi_intensity": oi_data["oi_intensity"],
                 "surge_strikes": oi_data["oi_surge_strikes"][:3],
             },
+            "confluence": {
+                "firing_models": len(firing_models),
+                "neg_gamma_wall_interaction": neg_gamma_score >= 50 and wall_breach_score >= 50,
+            },
+            "direction_margin": round(vote_margin, 3),
         },
     )
 
@@ -512,42 +550,57 @@ def _score_vanna_squeeze(vanna_data: dict) -> tuple[float, str | None]:
 
 
 def _compute_levels(
-    profile: GEXProfile, direction: str,
+    profile: GEXProfile, direction: str, vix_value: float | None = None,
 ) -> tuple[float, float, float]:
     """Compute entry, stop-loss, and target levels for a gamma blast trade.
 
-    Uses gamma walls and profile levels for intelligent placement:
-    - Entry: current spot
-    - SL: nearest opposing gamma wall (natural support/resistance)
-    - Target: next gamma wall in blast direction
+    Uses gamma walls and profile levels for intelligent placement.
+    SL/Target percentages scale dynamically with VIX:
+    - Low VIX (<14):  tighter SL (0.3%), tighter target (0.6%) — small moves
+    - Normal VIX:     standard SL (0.5%), standard target (0.8%)
+    - High VIX (>18): wider SL (0.7%), wider target (1.2%) — bigger swings
+    - Extreme (>22):  widest SL (0.9%), widest target (1.5%)
     """
     spot = profile.spot_price
     entry = spot
 
+    # Dynamic SL/Target percentages based on VIX regime
+    if vix_value is not None and vix_value > 0:
+        if vix_value < 14:
+            sl_pct, tgt_pct = 0.003, 0.006
+        elif vix_value < 18:
+            sl_pct, tgt_pct = 0.005, 0.008
+        elif vix_value < 22:
+            sl_pct, tgt_pct = 0.007, 0.012
+        else:
+            sl_pct, tgt_pct = 0.009, 0.015
+    else:
+        sl_pct, tgt_pct = 0.005, 0.008  # default (normal vol)
+
     if direction == "bullish":
-        # Stop loss: below put wall or 0.5% below entry
+        # Stop loss: put wall or dynamic % below entry
         if profile.put_wall and profile.put_wall < spot:
             sl = profile.put_wall
         else:
-            sl = spot * 0.995
+            sl = spot * (1.0 - sl_pct)
 
-        # Target: call wall or 0.8% above entry
+        # Target: call wall or dynamic % above entry
         if profile.call_wall and profile.call_wall > spot:
             target = profile.call_wall
         else:
-            target = spot * 1.008
+            target = spot * (1.0 + tgt_pct)
 
     else:  # bearish
-        # Stop loss: above call wall or 0.5% above entry
+        # Stop loss: call wall or dynamic % above entry
         if profile.call_wall and profile.call_wall > spot:
             sl = profile.call_wall
         else:
-            sl = spot * 1.005
+            sl = spot * (1.0 + sl_pct)
 
-        # Target: put wall or 0.8% below entry
+        # Target: put wall or dynamic % below entry
         if profile.put_wall and profile.put_wall < spot:
             target = profile.put_wall
         else:
-            target = spot * 0.992
+            target = spot * (1.0 - tgt_pct)
 
     return round(entry, 2), round(sl, 2), round(target, 2)
