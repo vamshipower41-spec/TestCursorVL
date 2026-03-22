@@ -201,6 +201,29 @@ if chain_df.empty:
     st.warning("No options chain data available.")
     st.stop()
 
+# Fetch real-time spot price from market-quote API (faster than chain, works after hours)
+# This ensures spot_price is never 0 even if the chain API returns stale data
+try:
+    import requests as _req
+    _spot_resp = _req.get(
+        f"{UPSTOX_BASE_URL}/market-quote/quotes",
+        params={"instrument_key": inst["instrument_key"]},
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        timeout=5,
+    )
+    if _spot_resp.status_code == 200:
+        _spot_data = _spot_resp.json().get("data", {})
+        for _v in _spot_data.values():
+            _live_ltp = _v.get("last_price", 0) or _v.get("ltp", 0)
+            if _live_ltp and float(_live_ltp) > 0:
+                spot_price = float(_live_ltp)
+except Exception:
+    pass  # Fall back to chain-derived spot price
+
+if spot_price <= 0:
+    st.error("Could not determine spot price. Please check your API connection.")
+    st.stop()
+
 # Process
 chain_df_clean = validate_greeks(chain_df)
 chain_df_filtered = filter_active_strikes(chain_df_clean, spot_price, num_strikes=40)
@@ -225,8 +248,8 @@ st.session_state.blast_price_history = st.session_state.blast_price_history[-20:
 
 # Try to fetch India VIX (best-effort, non-blocking)
 try:
-    import requests
-    vix_resp = requests.get(
+    import requests as _vix_req
+    vix_resp = _vix_req.get(
         f"{UPSTOX_BASE_URL}/market-quote/quotes",
         params={"instrument_key": "NSE_INDEX|India VIX"},
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
@@ -235,9 +258,17 @@ try:
     if vix_resp.status_code == 200:
         vix_data = vix_resp.json().get("data", {})
         for v in vix_data.values():
-            ltp = v.get("last_price", 0) or v.get("ltp", 0)
-            if ltp > 0:
-                st.session_state.blast_vix_value = ltp
+            # Upstox may use "last_price" or "ltp" depending on the response version
+            ltp = v.get("last_price") or v.get("ltp") or 0
+            if isinstance(ltp, (int, float)) and ltp > 0:
+                st.session_state.blast_vix_value = float(ltp)
+            elif isinstance(ltp, str):
+                try:
+                    parsed = float(ltp)
+                    if parsed > 0:
+                        st.session_state.blast_vix_value = parsed
+                except ValueError:
+                    pass
 except Exception:
     pass  # VIX fetch failed — continue without it
 

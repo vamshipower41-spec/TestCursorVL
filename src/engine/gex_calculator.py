@@ -37,6 +37,13 @@ def compute_gex_profile(
     """
     gex = pd.DataFrame({"strike_price": chain_df["strike_price"].values})
 
+    if spot_price <= 0:
+        # Cannot compute GEX without a valid spot price — return zero GEX
+        gex["call_gex"] = 0.0
+        gex["put_gex"] = 0.0
+        gex["net_gex"] = 0.0
+        return gex
+
     scale = contract_multiplier * spot_price ** 2 * 0.01
 
     gex["call_gex"] = chain_df["call_oi"].values * chain_df["call_gamma"].values * scale

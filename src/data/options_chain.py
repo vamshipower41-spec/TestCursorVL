@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import requests
 import pandas as pd
 
 from config.settings import UPSTOX_BASE_URL
 from src.auth.upstox_auth import get_auth_headers
+
+logger = logging.getLogger(__name__)
 
 
 class OptionsChainFetcher:
@@ -49,55 +52,83 @@ class OptionsChainFetcher:
             timeout=15,
         )
         resp.raise_for_status()
-        data = resp.json().get("data", [])
+        payload = resp.json()
+        data = payload.get("data", [])
 
         if not data:
+            logger.warning("Options chain API returned empty data for %s expiry %s",
+                           instrument_key, expiry_date)
             return pd.DataFrame(), 0.0
 
         rows = []
         spot_price = 0.0
 
         for strike_data in data:
-            row = {"strike_price": strike_data.get("strike_price", 0.0)}
+            strike = strike_data.get("strike_price", 0.0)
+            if not strike or strike <= 0:
+                continue  # Skip entries with missing/invalid strike price
 
-            # Extract call side
-            call = strike_data.get("call_options", {})
-            call_market = call.get("market_data", {})
-            call_greeks = call.get("option_greeks", {})
-            row["call_oi"] = call_market.get("oi", 0)
-            row["call_ltp"] = call_market.get("ltp", 0.0)
-            row["call_volume"] = call_market.get("volume", 0)
-            row["call_gamma"] = call_greeks.get("gamma", 0.0)
-            row["call_delta"] = call_greeks.get("delta", 0.0)
-            row["call_iv"] = call_greeks.get("iv", 0.0)
+            row = {"strike_price": float(strike)}
 
-            # Extract put side
-            put = strike_data.get("put_options", {})
-            put_market = put.get("market_data", {})
-            put_greeks = put.get("option_greeks", {})
-            row["put_oi"] = put_market.get("oi", 0)
-            row["put_ltp"] = put_market.get("ltp", 0.0)
-            row["put_volume"] = put_market.get("volume", 0)
-            row["put_gamma"] = put_greeks.get("gamma", 0.0)
-            row["put_delta"] = put_greeks.get("delta", 0.0)
-            row["put_iv"] = put_greeks.get("iv", 0.0)
+            # Extract call side — safely traverse nested dicts
+            call = strike_data.get("call_options") or {}
+            call_market = call.get("market_data") or {}
+            call_greeks = call.get("option_greeks") or {}
+            row["call_oi"] = int(call_market.get("oi") or 0)
+            row["call_ltp"] = float(call_market.get("ltp") or call_market.get("last_price") or 0.0)
+            row["call_volume"] = int(call_market.get("volume") or 0)
+            row["call_gamma"] = float(call_greeks.get("gamma") or 0.0)
+            row["call_delta"] = float(call_greeks.get("delta") or 0.0)
+            row["call_iv"] = float(call_greeks.get("iv") or call_greeks.get("vega") and 0.0 or 0.0)
+
+            # Extract put side — safely traverse nested dicts
+            put = strike_data.get("put_options") or {}
+            put_market = put.get("market_data") or {}
+            put_greeks = put.get("option_greeks") or {}
+            row["put_oi"] = int(put_market.get("oi") or 0)
+            row["put_ltp"] = float(put_market.get("ltp") or put_market.get("last_price") or 0.0)
+            row["put_volume"] = int(put_market.get("volume") or 0)
+            row["put_gamma"] = float(put_greeks.get("gamma") or 0.0)
+            row["put_delta"] = float(put_greeks.get("delta") or 0.0)
+            row["put_iv"] = float(put_greeks.get("iv") or 0.0)
 
             # Extract underlying spot price (same for all strikes)
-            underlying = strike_data.get("underlying_spot_price", 0.0)
-            if underlying:
-                spot_price = underlying
+            # Upstox uses "underlying_spot_price" — try alternatives too
+            underlying = (
+                strike_data.get("underlying_spot_price")
+                or strike_data.get("underlying_price")
+                or strike_data.get("spot_price")
+                or 0.0
+            )
+            if underlying and float(underlying) > 0:
+                spot_price = float(underlying)
 
             rows.append(row)
+
+        if not rows:
+            logger.warning("No valid strikes found in chain data")
+            return pd.DataFrame(), 0.0
 
         chain_df = pd.DataFrame(rows)
         chain_df.sort_values("strike_price", inplace=True)
         chain_df.reset_index(drop=True, inplace=True)
 
         if spot_price <= 0 and not chain_df.empty:
-            # Fallback: estimate spot from mid-point of ATM strikes
-            strikes = chain_df["strike_price"].values
-            if len(strikes) > 0:
+            # Fallback 1: estimate spot from ATM (where call_ltp ≈ put_ltp)
+            if "call_ltp" in chain_df.columns and "put_ltp" in chain_df.columns:
+                chain_df["_ltp_diff"] = (chain_df["call_ltp"] - chain_df["put_ltp"]).abs()
+                valid = chain_df[chain_df["_ltp_diff"] > 0]
+                if not valid.empty:
+                    atm_idx = valid["_ltp_diff"].idxmin()
+                    spot_price = float(chain_df.loc[atm_idx, "strike_price"])
+                chain_df.drop(columns=["_ltp_diff"], inplace=True)
+
+            # Fallback 2: mid-point of strike range
+            if spot_price <= 0:
+                strikes = chain_df["strike_price"].values
                 spot_price = float(strikes[len(strikes) // 2])
+
+            logger.info("Spot price estimated from chain data: %.2f", spot_price)
 
         return chain_df, spot_price
 
@@ -123,6 +154,7 @@ class OptionsChainFetcher:
                 chain_df, spot = self.fetch_chain(instrument_key, exp)
                 if not chain_df.empty:
                     results.append((exp, chain_df, spot))
-            except Exception:
+            except Exception as e:
+                logger.warning("Failed to fetch chain for expiry %s: %s", exp, e)
                 continue
         return results
